@@ -1,10 +1,10 @@
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Direction {
     TopDown,
     LeftRight,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum NodeShape {
     Rectangle,
     RoundedRect,
@@ -12,21 +12,21 @@ pub enum NodeShape {
     Circle,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EdgeStyle {
     Solid,
     Dashed,
     Dotted,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Arrowhead {
     Normal,
     Open,
     None,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Node {
     pub id: String,
     pub label: String,
@@ -37,7 +37,7 @@ pub struct Node {
     pub height: Option<f64>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     pub source: String,
     pub target: String,
@@ -46,7 +46,7 @@ pub struct Edge {
     pub arrowhead: Arrowhead,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Graph {
     pub direction: Direction,
     pub nodes: Vec<Node>,

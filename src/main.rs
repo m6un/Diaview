@@ -1,9 +1,4 @@
-mod layout;
-mod model;
-mod parser;
-mod renderer;
-
-use model::{Direction, Edge, EdgeStyle, Arrowhead, Graph, Node, NodeShape};
+use diaview::model::{Direction, Edge, EdgeStyle, Arrowhead, Graph, Node, NodeShape};
 
 fn main() {
     let graph = Graph {
