@@ -82,24 +82,20 @@ fn size_nodes(nodes: &mut [Node]) {
 
         let (w, h) = match node.shape {
             NodeShape::Diamond => {
-                // Diamond needs extra room because text is inside a rotated box.
-                // +2.0 accounts for left/right border characters.
-                let w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
-                let h = (1.0 + PADDING_V * 2.0 + 2.0) * DIAMOND_FACTOR;
+                let mut w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
+                let mut h = (1.0 + PADDING_V * 2.0 + 2.0) * DIAMOND_FACTOR;
+                w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
                 (w, h)
             }
             NodeShape::Circle => {
-                // Circle: both dimensions should match (but adjusted for aspect ratio).
-                // +2.0 accounts for left/right border characters.
-                let w = label_len + PADDING_H * 2.0 + 2.0;
-                // Terminal chars are ~2× tall, so to make a visual circle the
-                // height in rows should be roughly w/2.
+                let mut w = label_len + PADDING_H * 2.0 + 2.0;
+                w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
                 let h = (w / 2.0).max(1.0 + PADDING_V * 2.0 + 2.0);
                 (w, h)
             }
             NodeShape::Rectangle | NodeShape::RoundedRect => {
-                // +2.0 accounts for left/right border characters.
-                let w = label_len + PADDING_H * 2.0 + 2.0;
+                let mut w = label_len + PADDING_H * 2.0 + 2.0;
+                w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
                 let h = 1.0 + PADDING_V * 2.0 + 2.0;
                 (w, h)
             }
@@ -240,8 +236,8 @@ fn insert_dummies(graph: &mut Graph, layers: &mut Vec<Vec<usize>>, id_to_idx: &H
                             shape: NodeShape::Rectangle,
                             x: None,
                             y: None,
-                            width: Some(2.0),
-                            height: Some(2.0),
+                            width: Some(0.0),
+                            height: Some(0.0),
                         };
                         let dummy_idx = graph.nodes.len();
                         graph.nodes.push(dummy_node);
@@ -401,7 +397,13 @@ fn assign_positions(
     let sizes: Vec<(f64, f64)> = graph
         .nodes
         .iter()
-        .map(|n| (n.width.unwrap_or(MIN_WIDTH), n.height.unwrap_or(MIN_HEIGHT)))
+        .map(|n| {
+            if n.id.starts_with("__dummy") {
+                (0.0, 0.0) // Dummy nodes take 0 height/width so they don't break Y offsets
+            } else {
+                (n.width.unwrap_or(MIN_WIDTH), n.height.unwrap_or(MIN_HEIGHT))
+            }
+        })
         .collect();
 
     // For TopDown: layers are rows (y increases), within a row nodes are spread on x.

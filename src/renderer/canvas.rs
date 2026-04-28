@@ -172,6 +172,10 @@ fn connection_point(
     let cx = x + w / 2;
     let cy = y + h / 2;
 
+    if node.id.starts_with("__dummy") {
+        return Some((cx, cy));
+    }
+
     match direction {
         Direction::TopDown => {
             // Check if nodes are on roughly the same layer (same y region)
@@ -347,9 +351,24 @@ fn render_edge(
                 set_cell(buf, x, mid_y, edge_h_char(&edge.style), edge_style, all_nodes);
             }
             // Corners
-            let corner = if edge.style == EdgeStyle::Solid { '┼' } else { edge_h_char(&edge.style) };
-            set_cell(buf, start.0, mid_y, corner, edge_style, all_nodes);
-            set_cell(buf, end.0, mid_y, corner, edge_style, all_nodes);
+            if edge.style == EdgeStyle::Solid {
+                let corner1 = if end.0 > start.0 {
+                    if mid_y >= start.1 { '└' } else { '┌' }
+                } else {
+                    if mid_y >= start.1 { '┘' } else { '┐' }
+                };
+                let corner2 = if start.0 < end.0 {
+                    if end.1 >= mid_y { '┐' } else { '┘' }
+                } else {
+                    if end.1 >= mid_y { '┌' } else { '└' }
+                };
+                set_cell(buf, start.0, mid_y, corner1, edge_style, all_nodes);
+                set_cell(buf, end.0, mid_y, corner2, edge_style, all_nodes);
+            } else {
+                let c = edge_h_char(&edge.style);
+                set_cell(buf, start.0, mid_y, c, edge_style, all_nodes);
+                set_cell(buf, end.0, mid_y, c, edge_style, all_nodes);
+            }
         }
 
         // 3. Vertical from mid_y to end.1
@@ -379,9 +398,24 @@ fn render_edge(
                 set_cell(buf, mid_x, y, edge_v_char(&edge.style), edge_style, all_nodes);
             }
             // Corners
-            let corner = if edge.style == EdgeStyle::Solid { '┼' } else { edge_v_char(&edge.style) };
-            set_cell(buf, mid_x, start.1, corner, edge_style, all_nodes);
-            set_cell(buf, mid_x, end.1, corner, edge_style, all_nodes);
+            if edge.style == EdgeStyle::Solid {
+                let corner1 = if end.1 > start.1 {
+                    if mid_x >= start.0 { '┐' } else { '┌' }
+                } else {
+                    if mid_x >= start.0 { '┘' } else { '└' }
+                };
+                let corner2 = if start.1 < end.1 {
+                    if end.0 >= mid_x { '└' } else { '┘' }
+                } else {
+                    if end.0 >= mid_x { '┌' } else { '┐' }
+                };
+                set_cell(buf, mid_x, start.1, corner1, edge_style, all_nodes);
+                set_cell(buf, mid_x, end.1, corner2, edge_style, all_nodes);
+            } else {
+                let c = edge_v_char(&edge.style);
+                set_cell(buf, mid_x, start.1, c, edge_style, all_nodes);
+                set_cell(buf, mid_x, end.1, c, edge_style, all_nodes);
+            }
         }
 
         // 3. Horizontal from mid_x to end.0
