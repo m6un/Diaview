@@ -18,10 +18,10 @@ const MIN_WIDTH: f64 = 10.0;
 const MIN_HEIGHT: f64 = 3.0;
 
 /// Horizontal gap between sibling nodes in the same layer.
-const SPACING_H: f64 = 6.0;
+const SPACING_H: f64 = 8.0;
 
 /// Vertical gap between layers.
-const SPACING_V: f64 = 4.0;
+const SPACING_V: f64 = 5.0;
 
 /// Extra size multiplier for diamonds (they need more room because the label
 /// sits inside a rotated square).
@@ -72,22 +72,24 @@ fn size_nodes(nodes: &mut [Node]) {
         let (w, h) = match node.shape {
             NodeShape::Diamond => {
                 // Diamond needs extra room because text is inside a rotated box.
-                let w = (label_len + PADDING_H * 2.0) * DIAMOND_FACTOR;
-                let h = (1.0 + PADDING_V * 2.0) * DIAMOND_FACTOR;
+                // +2.0 accounts for left/right border characters.
+                let w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
+                let h = (1.0 + PADDING_V * 2.0 + 2.0) * DIAMOND_FACTOR;
                 (w, h)
             }
             NodeShape::Circle => {
                 // Circle: both dimensions should match (but adjusted for aspect ratio).
-                // Use the larger of label-based width and height-based width.
-                let w = label_len + PADDING_H * 2.0;
+                // +2.0 accounts for left/right border characters.
+                let w = label_len + PADDING_H * 2.0 + 2.0;
                 // Terminal chars are ~2× tall, so to make a visual circle the
                 // height in rows should be roughly w/2.
-                let h = (w / 2.0).max(1.0 + PADDING_V * 2.0);
+                let h = (w / 2.0).max(1.0 + PADDING_V * 2.0 + 2.0);
                 (w, h)
             }
             NodeShape::Rectangle | NodeShape::RoundedRect => {
-                let w = label_len + PADDING_H * 2.0;
-                let h = 1.0 + PADDING_V * 2.0;
+                // +2.0 accounts for left/right border characters.
+                let w = label_len + PADDING_H * 2.0 + 2.0;
+                let h = 1.0 + PADDING_V * 2.0 + 2.0;
                 (w, h)
             }
         };
@@ -512,6 +514,24 @@ mod tests {
         assert!(
             (c.x.unwrap() - d.x.unwrap()).abs() > 1.0,
             "C and D should be at different x positions"
+        );
+    }
+
+    #[test]
+    fn test_diamond_children_well_separated() {
+        let mut g = fixtures::diamond_decision();
+        layout(&mut g);
+
+        let c = find_node(&g, "C");
+        let d = find_node(&g, "D");
+
+        // C and D are siblings (both children of B). They must be spread
+        // horizontally with enough room that they don't visually collide.
+        // With proper sizing + spacing they should be at least 10 chars apart.
+        let separation = (c.x.unwrap() - d.x.unwrap()).abs();
+        assert!(
+            separation >= 10.0,
+            "C and D should be at least 10 chars apart, got {separation}"
         );
     }
 
