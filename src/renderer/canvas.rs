@@ -14,7 +14,7 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Paragraph},
 };
 
-use crate::model::{Arrowhead, EdgeStyle, Graph, Node, NodeShape};
+use crate::model::{Arrowhead, Direction, EdgeStyle, Graph, Node, NodeShape};
 
 /// Color per node shape for visual distinction.
 fn shape_color(shape: &NodeShape) -> Color {
@@ -31,7 +31,7 @@ fn shape_border_type(shape: &NodeShape) -> BorderType {
     match shape {
         NodeShape::RoundedRect => BorderType::Rounded,
         NodeShape::Rectangle => BorderType::Plain,
-        NodeShape::Diamond => BorderType::Rounded,
+        NodeShape::Diamond => BorderType::Double,
         NodeShape::Circle => BorderType::Rounded,
     }
 }
@@ -85,31 +85,26 @@ fn render_node(node: &Node, frame: &mut Frame, _area: Rect) {
 
     let color = shape_color(&node.shape);
 
-    match node.shape {
-        NodeShape::Diamond => {
-            render_diamond(node, frame, rect, color);
-        }
-        NodeShape::Circle => {
-            render_circle(node, frame, rect, color);
-        }
-        _ => {
-            // Rectangle / RoundedRect — use Block widget
-            let border_type = shape_border_type(&node.shape);
+    // All shapes use bordered Block — Diamond uses Double borders for visual distinction,
+    // Circle and RoundedRect use Rounded, Rectangle uses Plain.
+    let border_type = shape_border_type(&node.shape);
 
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(Style::default().fg(color));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border_type)
+        .border_style(Style::default().fg(color));
 
-            // Label centered inside the block (accounting for border padding)
-            let inner = block.inner(rect);
-            frame.render_widget(block, rect);
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
 
-            if inner.width > 0 && inner.height > 0 {
-                let label = center_label(&node.label, inner);
-                frame.render_widget(label, inner);
-            }
-        }
+    if inner.width > 0 && inner.height > 0 {
+        // For diamonds, prefix label with ◇ to indicate the shape
+        let display_label = match node.shape {
+            NodeShape::Diamond => format!("◇ {}", node.label),
+            _ => node.label.clone(),
+        };
+        let label = center_label(&display_label, inner);
+        frame.render_widget(label, inner);
     }
 }
 
@@ -131,78 +126,7 @@ fn center_label(text: &str, area: Rect) -> Paragraph<'_> {
     Paragraph::new(Text::from(lines))
 }
 
-/// Render a diamond shape manually using characters.
-fn render_diamond(node: &Node, frame: &mut Frame, rect: Rect, color: Color) {
-    let buf = frame.buffer_mut();
-    let cx = rect.x + rect.width / 2;
-    let cy = rect.y + rect.height / 2;
-    let half_w = (rect.width / 2) as i16;
-    let half_h = (rect.height / 2) as i16;
 
-    // Draw the diamond outline
-    for row in 0..rect.height {
-        let dy = (row as i16 - half_h).unsigned_abs() as u16;
-        // scale horizontal span by height/width
-        let span = if half_h > 0 {
-            ((half_w as u32 * (half_h as u32 - dy as u32)) / half_h as u32) as u16
-        } else {
-            0
-        };
-
-        let left = cx.saturating_sub(span);
-        let right = cx + span;
-        let y = rect.y + row;
-
-        if y >= buf.area.y + buf.area.height {
-            continue;
-        }
-
-        let style = Style::default().fg(color);
-
-        if row == 0 || row == rect.height - 1 {
-            // Top/bottom point
-            if cx < buf.area.x + buf.area.width {
-                buf[(cx, y)].set_char('◆').set_style(style);
-            }
-        } else {
-            // Left and right edges
-            if left >= buf.area.x && left < buf.area.x + buf.area.width {
-                buf[(left, y)].set_char('/').set_style(style);
-            }
-            if right >= buf.area.x && right < buf.area.x + buf.area.width && right != left {
-                buf[(right, y)].set_char('\\').set_style(style);
-            }
-        }
-    }
-
-    // Center label
-    let label_y = cy;
-    let label_len = node.label.len() as u16;
-    let label_x = cx.saturating_sub(label_len / 2);
-    for (i, ch) in node.label.chars().enumerate() {
-        let px = label_x + i as u16;
-        if px < buf.area.x + buf.area.width && label_y < buf.area.y + buf.area.height {
-            buf[(px, label_y)].set_char(ch);
-        }
-    }
-}
-
-/// Render a circle shape using rounded borders (visually approximated).
-fn render_circle(node: &Node, frame: &mut Frame, rect: Rect, color: Color) {
-    // Use a rounded rect as a circle approximation in the terminal
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(color));
-
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-
-    if inner.width > 0 && inner.height > 0 {
-        let label = center_label(&node.label, inner);
-        frame.render_widget(label, inner);
-    }
-}
 
 /// Render all edges in the graph.
 fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect) {
@@ -211,7 +135,7 @@ fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect) {
         let target = graph.nodes.iter().find(|n| n.id == edge.target);
 
         if let (Some(src), Some(tgt)) = (source, target) {
-            render_edge(src, tgt, edge, frame);
+            render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes);
         }
     }
 }
@@ -224,9 +148,18 @@ fn node_center(node: &Node) -> Option<(u16, u16)> {
     }
 }
 
-/// Compute the connection point just outside the border of a node toward a target point.
-/// This ensures arrowheads and edge lines don't land on the border itself.
-fn connection_point(node: &Node, toward_x: u16, toward_y: u16) -> Option<(u16, u16)> {
+/// Compute the connection point just outside the border of a node.
+/// Uses layout direction to pick the correct side:
+/// - TopDown: source exits from bottom, target enters from top
+/// - LeftRight: source exits from right, target enters from left
+/// Falls back to "toward center" heuristic only when nodes are on the same layer.
+fn connection_point(
+    node: &Node,
+    toward_x: u16,
+    toward_y: u16,
+    direction: &Direction,
+    is_source: bool,
+) -> Option<(u16, u16)> {
     let (x, y, w, h) = match (node.x, node.y, node.width, node.height) {
         (Some(x), Some(y), Some(w), Some(h)) => (x as u16, y as u16, w as u16, h as u16),
         _ => return None,
@@ -235,23 +168,56 @@ fn connection_point(node: &Node, toward_x: u16, toward_y: u16) -> Option<(u16, u
     let cx = x + w / 2;
     let cy = y + h / 2;
 
+    match direction {
+        Direction::TopDown => {
+            // Check if nodes are on roughly the same layer (same y region)
+            let dy = toward_y as i32 - cy as i32;
+            if is_source && dy > 0 {
+                // Source exits from bottom center
+                Some((cx, y + h))
+            } else if !is_source && dy < 0 {
+                // Target enters from top center (one cell above the border)
+                Some((cx, y.saturating_sub(1)))
+            } else {
+                // Same layer or unusual arrangement — fall back to heuristic
+                connection_point_heuristic(x, y, w, h, cx, cy, toward_x, toward_y)
+            }
+        }
+        Direction::LeftRight => {
+            let dx = toward_x as i32 - cx as i32;
+            if is_source && dx > 0 {
+                // Source exits from right center
+                Some((x + w, cy))
+            } else if !is_source && dx < 0 {
+                // Target enters from left center
+                Some((x.saturating_sub(1), cy))
+            } else {
+                connection_point_heuristic(x, y, w, h, cx, cy, toward_x, toward_y)
+            }
+        }
+    }
+}
+
+/// Fallback heuristic: pick the border side closest to the target point.
+fn connection_point_heuristic(
+    x: u16, y: u16, w: u16, h: u16,
+    cx: u16, cy: u16,
+    toward_x: u16, toward_y: u16,
+) -> Option<(u16, u16)> {
     let dx = toward_x as i32 - cx as i32;
     let dy = toward_y as i32 - cy as i32;
 
-    // Determine which border side to connect to, place point one cell outside the border
     if dx.abs() * (h as i32) > dy.abs() * (w as i32) {
-        // Horizontal dominates
         if dx > 0 {
-            Some((x + w, cy)) // one cell right of right border
+            Some((x + w, cy))
         } else {
-            Some((x.saturating_sub(1), cy)) // one cell left of left border
+            Some((x.saturating_sub(1), cy))
         }
     } else {
-        // Vertical dominates
         if dy > 0 {
-            Some((cx, y + h)) // one cell below bottom border
+            Some((cx, y + h))
         } else {
-            Some((cx, y.saturating_sub(1))) // one cell above top border
+            Some((cx, y.saturating_sub(1)))
         }
     }
 }
@@ -293,8 +259,33 @@ fn arrowhead_char(dx: i32, dy: i32, arrowhead: &Arrowhead) -> Option<char> {
     }
 }
 
+/// Check if a cell position is inside any node's bounding box.
+fn is_inside_any_node(px: u16, py: u16, nodes: &[Node]) -> bool {
+    for node in nodes {
+        if let (Some(nx), Some(ny), Some(nw), Some(nh)) =
+            (node.x, node.y, node.width, node.height)
+        {
+            let nx = nx as u16;
+            let ny = ny as u16;
+            let nw = nw as u16;
+            let nh = nh as u16;
+            if px >= nx && px < nx + nw && py >= ny && py < ny + nh {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Render a single edge between two nodes using orthogonal routing.
-fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Frame) {
+fn render_edge(
+    src: &Node,
+    tgt: &Node,
+    edge: &crate::model::Edge,
+    frame: &mut Frame,
+    direction: &Direction,
+    all_nodes: &[Node],
+) {
     let src_center = match node_center(src) {
         Some(c) => c,
         None => return,
@@ -304,11 +295,11 @@ fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Fr
         None => return,
     };
 
-    let start = match connection_point(src, tgt_center.0, tgt_center.1) {
+    let start = match connection_point(src, tgt_center.0, tgt_center.1, direction, true) {
         Some(p) => p,
         None => return,
     };
-    let end = match connection_point(tgt, src_center.0, src_center.1) {
+    let end = match connection_point(tgt, src_center.0, src_center.1, direction, false) {
         Some(p) => p,
         None => return,
     };
@@ -320,6 +311,17 @@ fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Fr
 
     let dx = end.0 as i32 - start.0 as i32;
     let dy = end.1 as i32 - start.1 as i32;
+
+    // Helper: set a cell only if it's in bounds and NOT inside any node's bounding box
+    let set_cell = |buf: &mut ratatui::buffer::Buffer, px: u16, py: u16, ch: char, style: Style, nodes: &[Node]| {
+        if px < buf.area.x + buf.area.width
+            && py < buf.area.y + buf.area.height
+            && py >= buf.area.y
+            && !is_inside_any_node(px, py, nodes)
+        {
+            buf[(px, py)].set_char(ch).set_style(style);
+        }
+    };
 
     // Orthogonal routing: go vertical first, then horizontal (for top-down),
     // or horizontal first then vertical (for left-right).
@@ -333,21 +335,16 @@ fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Fr
         mid_x = start.0;
         mid_y = end.1;
 
-        // Vertical segment from start
         let (y0, y1) = if start.1 <= end.1 {
             (start.1, end.1)
         } else {
             (end.1, start.1)
         };
 
-        // Draw vertical line at start.x
         for y in y0..=y1 {
-            if mid_x < buf_area.x + buf_area.width && y < buf_area.y + buf_area.height && y >= buf_area.y {
-                buf[(mid_x, y)].set_char(edge_v_char(&edge.style)).set_style(edge_style);
-            }
+            set_cell(buf, mid_x, y, edge_v_char(&edge.style), edge_style, all_nodes);
         }
 
-        // Draw horizontal line at end.y from start.x to end.x
         if mid_x != end.0 {
             let (x0, x1) = if mid_x <= end.0 {
                 (mid_x, end.0)
@@ -355,33 +352,25 @@ fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Fr
                 (end.0, mid_x)
             };
             for x in x0..=x1 {
-                if x < buf_area.x + buf_area.width && mid_y < buf_area.y + buf_area.height && mid_y >= buf_area.y {
-                    buf[(x, mid_y)].set_char(edge_h_char(&edge.style)).set_style(edge_style);
-                }
+                set_cell(buf, x, mid_y, edge_h_char(&edge.style), edge_style, all_nodes);
             }
             // Corner at the bend
-            if mid_x < buf_area.x + buf_area.width && mid_y < buf_area.y + buf_area.height {
-                buf[(mid_x, mid_y)].set_char('┼').set_style(edge_style);
-            }
+            set_cell(buf, mid_x, mid_y, '┼', edge_style, all_nodes);
         }
     } else {
         // Primarily horizontal: go horizontal first, then vertical
         mid_x = end.0;
         mid_y = start.1;
 
-        // Horizontal line at start.y
         let (x0, x1) = if start.0 <= end.0 {
             (start.0, end.0)
         } else {
             (end.0, start.0)
         };
         for x in x0..=x1 {
-            if x < buf_area.x + buf_area.width && mid_y < buf_area.y + buf_area.height && mid_y >= buf_area.y {
-                buf[(x, mid_y)].set_char(edge_h_char(&edge.style)).set_style(edge_style);
-            }
+            set_cell(buf, x, mid_y, edge_h_char(&edge.style), edge_style, all_nodes);
         }
 
-        // Vertical line at end.x
         if mid_y != end.1 {
             let (y0, y1) = if mid_y <= end.1 {
                 (mid_y, end.1)
@@ -389,18 +378,14 @@ fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Fr
                 (end.1, mid_y)
             };
             for y in y0..=y1 {
-                if mid_x < buf_area.x + buf_area.width && y < buf_area.y + buf_area.height && y >= buf_area.y {
-                    buf[(mid_x, y)].set_char(edge_v_char(&edge.style)).set_style(edge_style);
-                }
+                set_cell(buf, mid_x, y, edge_v_char(&edge.style), edge_style, all_nodes);
             }
             // Corner at (end.x, start.y)
-            if mid_x < buf_area.x + buf_area.width && mid_y < buf_area.y + buf_area.height {
-                buf[(mid_x, mid_y)].set_char('┼').set_style(edge_style);
-            }
+            set_cell(buf, mid_x, mid_y, '┼', edge_style, all_nodes);
         }
     }
 
-    // Arrowhead at the end point
+    // Arrowhead at the end point — always draw (even near nodes) so it's visible
     let arrow_dx = end.0 as i32 - start.0 as i32;
     let arrow_dy = end.1 as i32 - start.1 as i32;
     if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
@@ -409,17 +394,26 @@ fn render_edge(src: &Node, tgt: &Node, edge: &crate::model::Edge, frame: &mut Fr
         }
     }
 
-    // Edge label at midpoint
+    // Edge label at midpoint, offset perpendicular to the edge direction
     if let Some(ref label) = edge.label {
         let label_x = ((start.0 as i32 + end.0 as i32) / 2) as u16;
         let label_y = ((start.1 as i32 + end.1 as i32) / 2) as u16;
 
-        // Place label text, offset by 1 to the right to avoid overwriting the line
-        let lx = label_x + 1;
+        // For vertical edges, offset label to the right (+1 x)
+        // For horizontal edges, offset label above (-1 y)
+        let (lx, ly) = if dy.abs() >= dx.abs() {
+            (label_x + 1, label_y)
+        } else {
+            (label_x, label_y.saturating_sub(1))
+        };
+
+        // Clear background behind label text, then draw the label
         for (i, ch) in label.chars().enumerate() {
             let px = lx + i as u16;
-            if px < buf_area.x + buf_area.width && label_y < buf_area.y + buf_area.height {
-                buf[(px, label_y)].set_char(ch).set_style(Style::default().fg(Color::Gray));
+            if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {
+                // Clear cell first (reset to space), then set label char
+                buf[(px, ly)].set_char(' ');
+                buf[(px, ly)].set_char(ch).set_style(Style::default().fg(Color::Gray));
             }
         }
     }
@@ -694,9 +688,21 @@ mod tests {
         terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
         let buf = terminal.backend().buffer();
 
-        // Center of diamond: x=8, y=3. Label "OK?" starts around x=7
-        let rendered: String = (7..10).map(|x| buf[(x, 3)].symbol().to_string()).collect();
-        assert_eq!(rendered, "OK?", "Diamond label should read 'OK?', got: '{rendered}'");
+        // Diamond now renders as a Double-bordered Block with "◇ OK?" label
+        // Double borders: ╔ at top-left (3,1), ╗ at top-right (13,1)
+        assert_eq!(buf[(3, 1)].symbol(), "╔", "Diamond top-left should be ╔");
+        assert_eq!(buf[(13, 1)].symbol(), "╗", "Diamond top-right should be ╗");
+        assert_eq!(buf[(3, 5)].symbol(), "╚", "Diamond bottom-left should be ╚");
+        assert_eq!(buf[(13, 5)].symbol(), "╝", "Diamond bottom-right should be ╝");
+
+        // Inner area: x=4..13, y=2..5. Label "◇ OK?" (5 display chars) centered.
+        // Inner width = 9, so padded start = 4 + (9-5)/2 = 6
+        // Check the label contains "OK?" somewhere in the inner area at the middle row (y=3)
+        let rendered: String = (4..13).map(|x| buf[(x, 3)].symbol().to_string()).collect();
+        assert!(
+            rendered.contains("OK?"),
+            "Diamond label should contain 'OK?', got: '{rendered}'"
+        );
     }
 
     #[test]
