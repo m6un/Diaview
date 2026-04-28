@@ -313,9 +313,6 @@ fn render_edge(
 
     let edge_style = Style::default().fg(Color::DarkGray);
 
-    let dx = end.0 as i32 - start.0 as i32;
-    let dy = end.1 as i32 - start.1 as i32;
-
     // Helper: set a cell only if it's in bounds and NOT inside any node's bounding box
     let set_cell = |buf: &mut ratatui::buffer::Buffer, px: u16, py: u16, ch: char, style: Style, nodes: &[Node]| {
         if px < buf.area.x + buf.area.width
@@ -327,88 +324,101 @@ fn render_edge(
         }
     };
 
-    // Orthogonal routing: go vertical first, then horizontal (for top-down),
-    // or horizontal first then vertical (for left-right).
-    // Simple L-shaped routing.
+    let min_max = |a: u16, b: u16| if a < b { (a, b) } else { (b, a) };
 
-    let mid_x;
-    let mid_y;
+    let arrow_dx;
+    let arrow_dy;
+    let label_x;
+    let label_y;
 
-    if dy.abs() >= dx.abs() {
-        // Primarily vertical: go vertical to midpoint, then horizontal, then vertical
-        mid_x = start.0;
-        mid_y = end.1;
+    if *direction == Direction::TopDown {
+        let mid_y = (start.1 + end.1) / 2;
 
-        let (y0, y1) = if start.1 <= end.1 {
-            (start.1, end.1)
-        } else {
-            (end.1, start.1)
-        };
-
+        // 1. Vertical from start to mid_y
+        let (y0, y1) = min_max(start.1, mid_y);
         for y in y0..=y1 {
-            set_cell(buf, mid_x, y, edge_v_char(&edge.style), edge_style, all_nodes);
+            set_cell(buf, start.0, y, edge_v_char(&edge.style), edge_style, all_nodes);
         }
 
-        if mid_x != end.0 {
-            let (x0, x1) = if mid_x <= end.0 {
-                (mid_x, end.0)
-            } else {
-                (end.0, mid_x)
-            };
+        // 2. Horizontal from start.0 to end.0 at mid_y
+        if start.0 != end.0 {
+            let (x0, x1) = min_max(start.0, end.0);
             for x in x0..=x1 {
                 set_cell(buf, x, mid_y, edge_h_char(&edge.style), edge_style, all_nodes);
             }
-            // Corner at the bend
-            set_cell(buf, mid_x, mid_y, '┼', edge_style, all_nodes);
+            // Corners
+            let corner = if edge.style == EdgeStyle::Solid { '┼' } else { edge_h_char(&edge.style) };
+            set_cell(buf, start.0, mid_y, corner, edge_style, all_nodes);
+            set_cell(buf, end.0, mid_y, corner, edge_style, all_nodes);
         }
+
+        // 3. Vertical from mid_y to end.1
+        let (y0, y1) = min_max(mid_y, end.1);
+        for y in y0..=y1 {
+            set_cell(buf, end.0, y, edge_v_char(&edge.style), edge_style, all_nodes);
+        }
+
+        arrow_dx = 0;
+        arrow_dy = end.1 as i32 - mid_y as i32;
+
+        label_x = (start.0 + end.0) / 2;
+        label_y = mid_y;
     } else {
-        // Primarily horizontal: go horizontal first, then vertical
-        mid_x = end.0;
-        mid_y = start.1;
+        let mid_x = (start.0 + end.0) / 2;
 
-        let (x0, x1) = if start.0 <= end.0 {
-            (start.0, end.0)
-        } else {
-            (end.0, start.0)
-        };
+        // 1. Horizontal from start to mid_x
+        let (x0, x1) = min_max(start.0, mid_x);
         for x in x0..=x1 {
-            set_cell(buf, x, mid_y, edge_h_char(&edge.style), edge_style, all_nodes);
+            set_cell(buf, x, start.1, edge_h_char(&edge.style), edge_style, all_nodes);
         }
 
-        if mid_y != end.1 {
-            let (y0, y1) = if mid_y <= end.1 {
-                (mid_y, end.1)
-            } else {
-                (end.1, mid_y)
-            };
+        // 2. Vertical from start.1 to end.1 at mid_x
+        if start.1 != end.1 {
+            let (y0, y1) = min_max(start.1, end.1);
             for y in y0..=y1 {
                 set_cell(buf, mid_x, y, edge_v_char(&edge.style), edge_style, all_nodes);
             }
-            // Corner at (end.x, start.y)
-            set_cell(buf, mid_x, mid_y, '┼', edge_style, all_nodes);
+            // Corners
+            let corner = if edge.style == EdgeStyle::Solid { '┼' } else { edge_v_char(&edge.style) };
+            set_cell(buf, mid_x, start.1, corner, edge_style, all_nodes);
+            set_cell(buf, mid_x, end.1, corner, edge_style, all_nodes);
         }
+
+        // 3. Horizontal from mid_x to end.0
+        let (x0, x1) = min_max(mid_x, end.0);
+        for x in x0..=x1 {
+            set_cell(buf, x, end.1, edge_h_char(&edge.style), edge_style, all_nodes);
+        }
+
+        arrow_dx = end.0 as i32 - mid_x as i32;
+        arrow_dy = 0;
+
+        label_x = mid_x;
+        label_y = (start.1 + end.1) / 2;
     }
 
     // Arrowhead at the end point — always draw (even near nodes) so it's visible
-    let arrow_dx = end.0 as i32 - start.0 as i32;
-    let arrow_dy = end.1 as i32 - start.1 as i32;
     if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
         if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
             buf[(end.0, end.1)].set_char(arrow).set_style(Style::default().fg(Color::White));
         }
     }
 
-    // Edge label at midpoint, offset perpendicular to the edge direction
+    // Edge label at midpoint, offset perpendicular to the middle segment
     if let Some(ref label) = edge.label {
-        let label_x = ((start.0 as i32 + end.0 as i32) / 2) as u16;
-        let label_y = ((start.1 as i32 + end.1 as i32) / 2) as u16;
-
-        // For vertical edges, offset label to the right (+1 x)
-        // For horizontal edges, offset label above (-1 y)
-        let (lx, ly) = if dy.abs() >= dx.abs() {
-            (label_x + 1, label_y)
+        let actually_horizontal = if *direction == Direction::TopDown {
+            start.0 != end.0
         } else {
-            (label_x, label_y.saturating_sub(1))
+            start.1 == end.1
+        };
+
+        let (lx, ly) = if actually_horizontal {
+            // Offset label above the horizontal line
+            let start_x = label_x.saturating_sub((label.len() / 2) as u16);
+            (start_x, label_y.saturating_sub(1))
+        } else {
+            // Offset label to the right of the vertical line
+            (label_x + 1, label_y)
         };
 
         // Clear background behind label text, then draw the label
