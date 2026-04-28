@@ -54,7 +54,18 @@ pub fn layout(graph: &mut Graph) {
         .map(|(i, n)| (n.id.clone(), i))
         .collect();
 
-    let layers = assign_layers(graph, &id_to_idx);
+    let mut layers = assign_layers(graph, &id_to_idx);
+
+    // Step 2.5: insert dummy nodes for long edges
+    insert_dummies(graph, &mut layers, &id_to_idx);
+
+    // Rebuild index mapping since graph.nodes may have grown
+    let id_to_idx: HashMap<String, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.clone(), i))
+        .collect();
 
     // Step 3: order within layers (barycenter heuristic)
     let ordered_layers = order_layers(&layers, graph, &id_to_idx);
@@ -191,6 +202,92 @@ fn assign_layers(graph: &Graph, id_to_idx: &HashMap<String, usize>) -> Vec<Vec<u
     }
 
     layers
+}
+
+// ── Step 2.5: dummy node insertion for long edges ───────────────────────────
+
+fn insert_dummies(graph: &mut Graph, layers: &mut Vec<Vec<usize>>, id_to_idx: &HashMap<String, usize>) {
+    // Reverse map to easily find node layer
+    let mut node_to_layer = HashMap::new();
+    for (l, layer) in layers.iter().enumerate() {
+        for &n in layer {
+            node_to_layer.insert(n, l);
+        }
+    }
+
+    let mut new_edges = Vec::new();
+    let mut edges_to_remove = HashSet::new();
+
+    for (i, edge) in graph.edges.iter().enumerate() {
+        if let (Some(&u), Some(&v)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
+            let l_u = *node_to_layer.get(&u).unwrap_or(&0);
+            let l_v = *node_to_layer.get(&v).unwrap_or(&0);
+
+            if l_v > l_u + 1 {
+                // Long edge spanning multiple layers!
+                edges_to_remove.insert(i);
+
+                let mut current_src = edge.source.clone();
+
+                for l in (l_u + 1)..l_v {
+                    let dummy_id = format!("__dummy_{}_{}_{}", edge.source, edge.target, l);
+                    
+                    // Avoid inserting the same dummy multiple times
+                    if !id_to_idx.contains_key(&dummy_id) {
+                        let dummy_node = Node {
+                            id: dummy_id.clone(),
+                            label: "".into(),
+                            shape: NodeShape::Rectangle,
+                            x: None,
+                            y: None,
+                            width: Some(2.0),
+                            height: Some(2.0),
+                        };
+                        let dummy_idx = graph.nodes.len();
+                        graph.nodes.push(dummy_node);
+
+                        // Add to layer
+                        while layers.len() <= l {
+                            layers.push(vec![]);
+                        }
+                        layers[l].push(dummy_idx);
+                    }
+
+                    // Connect current source to this dummy
+                    new_edges.push(crate::model::Edge {
+                        source: current_src.clone(),
+                        target: dummy_id.clone(),
+                        // Place label on the first segment only
+                        label: if current_src == edge.source { edge.label.clone() } else { None },
+                        style: edge.style.clone(),
+                        // Only the final segment gets the arrowhead
+                        arrowhead: crate::model::Arrowhead::None,
+                    });
+
+                    current_src = dummy_id;
+                }
+
+                // Connect the last dummy to the actual target
+                new_edges.push(crate::model::Edge {
+                    source: current_src,
+                    target: edge.target.clone(),
+                    label: None,
+                    style: edge.style.clone(),
+                    arrowhead: edge.arrowhead.clone(),
+                });
+            }
+        }
+    }
+
+    // Remove old edges, add new segmented edges
+    let mut final_edges = Vec::new();
+    for (i, edge) in graph.edges.drain(..).enumerate() {
+        if !edges_to_remove.contains(&i) {
+            final_edges.push(edge);
+        }
+    }
+    final_edges.extend(new_edges);
+    graph.edges = final_edges;
 }
 
 // ── Step 3: ordering within layers (barycenter heuristic) ───────────────────

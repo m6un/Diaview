@@ -76,6 +76,10 @@ pub fn render_to_frame(graph: &Graph, frame: &mut Frame) {
 
 /// Render a single node as a bordered Block with a centered label Paragraph.
 fn render_node(node: &Node, frame: &mut Frame, _area: Rect) {
+    if node.id.starts_with("__dummy") {
+        return; // skip rendering dummy layout nodes completely
+    }
+
     let (x, y, w, h) = match (node.x, node.y, node.width, node.height) {
         (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
         _ => return, // skip nodes without layout
