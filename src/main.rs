@@ -1,20 +1,22 @@
-use diaview::parser::mermaid;
 use diaview::layout;
+use diaview::parser::mermaid;
 use diaview::renderer::canvas;
+use diaview::testdata::fixtures;
 
 fn main() {
-    let input = std::env::args()
-        .nth(1)
+    let mut inline = false;
+    let mut path: Option<String> = None;
+
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "--inline" | "-i" => inline = true,
+            _ => path = Some(arg),
+        }
+    }
+
+    let input = path
         .map(|path| std::fs::read_to_string(&path).expect("Failed to read file"))
-        .unwrap_or_else(|| {
-            r#"graph TD
-    A[Start] --> B{Decision}
-    B -->|yes| C(Process)
-    B -->|no| D((End))
-    C --> D
-"#
-            .to_string()
-        });
+        .unwrap_or_else(|| fixtures::complex_architecture_mermaid().to_string());
 
     let mut graph = mermaid::parse(&input).unwrap_or_else(|e| {
         eprintln!("Parse error: {e}");
@@ -23,7 +25,13 @@ fn main() {
 
     layout::layout(&mut graph);
 
-    canvas::render(&graph).unwrap_or_else(|e| {
+    let result = if inline {
+        canvas::render_inline(&graph)
+    } else {
+        canvas::render(&graph)
+    };
+
+    result.unwrap_or_else(|e| {
         eprintln!("Render error: {e}");
         std::process::exit(1);
     });

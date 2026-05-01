@@ -1,5 +1,4 @@
-/// Test helpers for creating sample graphs.
-#[cfg(test)]
+/// Test helpers and sample Mermaid diagrams.
 pub mod fixtures {
     use crate::model::*;
 
@@ -91,6 +90,16 @@ pub mod fixtures {
                 },
             ],
         }
+    }
+
+    /// A more complex Mermaid flowchart fixture used for visual renderer dumps.
+    pub fn complex_architecture_mermaid() -> &'static str {
+"graph LR
+    A[Square Rect] -- Link text --> B((Circle))
+    A --> C(Round Rect)
+    B --> D{Rhombus}
+    C --> D
+"
     }
 
     /// Left-right direction, 3 nodes in a chain

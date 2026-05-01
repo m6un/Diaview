@@ -5,14 +5,14 @@ use std::collections::{HashMap, HashSet, VecDeque};
 // All values are in character-cell units.
 
 /// Horizontal padding inside a node (each side).
-const PADDING_H: f64 = 2.0;
+const PADDING_H: f64 = 1.0;
 
 /// Vertical padding inside a node (each side).
-/// Smaller than horizontal because terminal chars are ~2× taller than wide.
-const PADDING_V: f64 = 1.0;
+/// Keep this compact; terminal rows are already visually tall.
+const PADDING_V: f64 = 0.0;
 
 /// Minimum node width so tiny labels still look good.
-const MIN_WIDTH: f64 = 10.0;
+const MIN_WIDTH: f64 = 8.0;
 
 /// Minimum node height.
 const MIN_HEIGHT: f64 = 3.0;
@@ -23,9 +23,9 @@ const SPACING_H: f64 = 8.0;
 /// Vertical gap between layers.
 const SPACING_V: f64 = 5.0;
 
-/// Extra size multiplier for diamonds (they need more room because the label
-/// sits inside a rotated square).
-const DIAMOND_FACTOR: f64 = 1.4;
+/// Extra size multiplier for diamonds.
+/// Kept at 1.0 because diamonds are rendered as semantic boxed nodes (`◆ label`).
+const DIAMOND_FACTOR: f64 = 1.0;
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
@@ -78,22 +78,20 @@ pub fn layout(graph: &mut Graph) {
 
 fn size_nodes(nodes: &mut [Node]) {
     for node in nodes.iter_mut() {
-        let label_len = node.label.len() as f64;
+        let label_len = match node.shape {
+            // Semantic boxed shapes render an icon plus a space before the label.
+            NodeShape::Diamond | NodeShape::Circle => node.label.len() as f64 + 2.0,
+            _ => node.label.len() as f64,
+        };
 
         let (w, h) = match node.shape {
             NodeShape::Diamond => {
                 let mut w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
-                let mut h = (1.0 + PADDING_V * 2.0 + 2.0) * DIAMOND_FACTOR;
+                let h = 1.0 + PADDING_V * 2.0 + 2.0;
                 w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
                 (w, h)
             }
-            NodeShape::Circle => {
-                let mut w = label_len + PADDING_H * 2.0 + 2.0;
-                w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
-                let h = (w / 2.0).max(1.0 + PADDING_V * 2.0 + 2.0);
-                (w, h)
-            }
-            NodeShape::Rectangle | NodeShape::RoundedRect => {
+            NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect => {
                 let mut w = label_len + PADDING_H * 2.0 + 2.0;
                 w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
                 let h = 1.0 + PADDING_V * 2.0 + 2.0;
@@ -438,19 +436,31 @@ fn assign_positions(
         let cross_offset = (max_cross_span - layer_spans[li]) / 2.0;
 
         // Max extent along the main axis in this layer (for advancing the cursor).
-        let mut max_main_extent: f64 = 0.0;
+        // Dummy route points are zero-sized, but they should sit in the middle of
+        // the layer lane rather than at the top/left edge; otherwise long edges
+        // can run flush along real node borders.
+        let max_main_extent = layer
+            .iter()
+            .map(|&node_idx| {
+                let (w, h) = sizes[node_idx];
+                if is_lr { w } else { h }
+            })
+            .fold(0.0_f64, f64::max);
 
         let mut cross_cursor = cross_offset;
 
         for &node_idx in layer {
             let (w, h) = sizes[node_idx];
+            let is_dummy = graph.nodes[node_idx].id.starts_with("__dummy");
 
             let (x, y) = if is_lr {
                 // main axis = x (layer index), cross axis = y
-                (main_cursor, cross_cursor)
+                let x = if is_dummy { main_cursor + max_main_extent / 2.0 } else { main_cursor };
+                (x, cross_cursor)
             } else {
                 // main axis = y (layer index), cross axis = x
-                (cross_cursor, main_cursor)
+                let y = if is_dummy { main_cursor + max_main_extent / 2.0 } else { main_cursor };
+                (cross_cursor, y)
             };
 
             graph.nodes[node_idx].x = Some(x);
@@ -458,14 +468,71 @@ fn assign_positions(
 
             if is_lr {
                 cross_cursor += h + SPACING_H;
-                max_main_extent = max_main_extent.max(w);
             } else {
                 cross_cursor += w + SPACING_H;
-                max_main_extent = max_main_extent.max(h);
             }
         }
 
         main_cursor += max_main_extent + SPACING_V;
+    }
+
+    align_long_edge_targets(graph, layers, is_lr);
+}
+
+/// When a long edge is split by a dummy route point, prefer placing a lone
+/// target under/after that route point. Otherwise a `B -> D` edge that skips
+/// over `C` gets averaged between `C -> D` and the dummy parent, causing the
+/// routed branch to swing right, down, and then back left in an ugly loop.
+fn align_long_edge_targets(graph: &mut Graph, layers: &[Vec<usize>], is_lr: bool) {
+    let id_to_idx: HashMap<String, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.clone(), i))
+        .collect();
+
+    let mut layer_of = HashMap::new();
+    for (li, layer) in layers.iter().enumerate() {
+        for &idx in layer {
+            layer_of.insert(idx, li);
+        }
+    }
+
+    for edge in &graph.edges {
+        if !edge.source.starts_with("__dummy") {
+            continue;
+        }
+        let (Some(&dummy_idx), Some(&target_idx)) =
+            (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
+        else {
+            continue;
+        };
+        if graph.nodes[target_idx].id.starts_with("__dummy") {
+            continue;
+        }
+
+        let Some(&target_layer) = layer_of.get(&target_idx) else {
+            continue;
+        };
+        let visible_count = layers[target_layer]
+            .iter()
+            .filter(|&&idx| !graph.nodes[idx].id.starts_with("__dummy"))
+            .count();
+        if visible_count != 1 {
+            continue;
+        }
+
+        if is_lr {
+            if let (Some(dummy_y), Some(target_h)) =
+                (graph.nodes[dummy_idx].y, graph.nodes[target_idx].height)
+            {
+                graph.nodes[target_idx].y = Some((dummy_y - target_h / 2.0).max(0.0));
+            }
+        } else if let (Some(dummy_x), Some(target_w)) =
+            (graph.nodes[dummy_idx].x, graph.nodes[target_idx].width)
+        {
+            graph.nodes[target_idx].x = Some((dummy_x - target_w / 2.0).max(0.0));
+        }
     }
 }
 
