@@ -104,14 +104,13 @@ pub mod fixtures {
         }
     }
 
-    /// A more complex Mermaid flowchart fixture used for visual renderer dumps.
+    /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
+    pub const COMPLEX_ARCHITECTURE_MERMAID: &str =
+        include_str!("../fixtures/complex_architecture.mmd");
+
+    /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
     pub fn complex_architecture_mermaid() -> &'static str {
-        "graph LR
-    A[Square Rect] -- Link text --> B((Circle))
-    A --> C(Round Rect)
-    B --> D{Rhombus}
-    C --> D
-"
+        COMPLEX_ARCHITECTURE_MERMAID
     }
 
     /// Left-right direction, 3 nodes in a chain
@@ -164,5 +163,21 @@ pub mod fixtures {
                 },
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures;
+
+    #[test]
+    fn complex_architecture_fixture_parses() {
+        let graph =
+            crate::parser::mermaid::parse(fixtures::complex_architecture_mermaid()).unwrap();
+
+        assert_eq!(graph.nodes.len(), 33);
+        assert_eq!(graph.edges.len(), 32);
+        assert!(graph.nodes.iter().any(|node| node.id == "ROUTER"));
+        assert!(graph.nodes.iter().any(|node| node.id == "SUCCESS"));
     }
 }
