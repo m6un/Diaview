@@ -3,3 +3,4 @@ pub mod model;
 pub mod parser;
 pub mod renderer;
 pub mod testdata;
+pub mod theme;
