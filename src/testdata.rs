@@ -45,25 +45,37 @@ pub mod fixtures {
                     id: "A".into(),
                     label: "Start".into(),
                     shape: NodeShape::RoundedRect,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "B".into(),
                     label: "Decision".into(),
                     shape: NodeShape::Diamond,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "C".into(),
                     label: "Yes path".into(),
                     shape: NodeShape::Rectangle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "D".into(),
                     label: "No path".into(),
                     shape: NodeShape::Rectangle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
             ],
             edges: vec![
@@ -94,7 +106,7 @@ pub mod fixtures {
 
     /// A more complex Mermaid flowchart fixture used for visual renderer dumps.
     pub fn complex_architecture_mermaid() -> &'static str {
-"graph LR
+        "graph LR
     A[Square Rect] -- Link text --> B((Circle))
     A --> C(Round Rect)
     B --> D{Rhombus}
@@ -111,19 +123,28 @@ pub mod fixtures {
                     id: "A".into(),
                     label: "Input".into(),
                     shape: NodeShape::Rectangle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "B".into(),
                     label: "Process".into(),
                     shape: NodeShape::RoundedRect,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "C".into(),
                     label: "Output".into(),
                     shape: NodeShape::Circle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
             ],
             edges: vec![
