@@ -41,7 +41,9 @@ The foundation — parse Mermaid, lay out nodes, render beautifully to the termi
 
 ## Phase 1.5: Complex Diagram Layout & Routing
 
-**Status: Newly identified gap**
+**Status: Planned technical phase**
+
+Focused implementation plan: [`phase-1.5-layout.md`](phase-1.5-layout.md).
 
 The renderer is visually strong for tree-shaped, pipeline-shaped, and moderately branched DAG diagrams. However, stress-testing with real architecture-style Mermaid exposed that Diaview does **not yet handle dense complex diagrams well**.
 
@@ -61,29 +63,15 @@ The issue is not primarily styling. It is layout/routing intelligence. Current D
 - [ ] **No subgraph/swimlane clustering** — architecture diagrams want sections like Client, Edge, API, Services, Data, Observability, External
 - [ ] **Monitoring/telemetry edges overwhelm primary flow** — dotted side-channel edges should be bundled, dimmed, hidden, or routed separately
 
-### Required layout improvements
+### Required implementation sequence
 
-- [ ] Implement a fuller Sugiyama-style pipeline:
-  - [ ] cycle detection and cycle/back-edge handling
-  - [ ] stronger layer assignment
-  - [ ] dummy nodes for all long edges
-  - [ ] crossing minimization across multiple sweeps
-  - [ ] coordinate assignment with spacing constraints
-- [ ] Add global orthogonal routing with lane reservation and route costs
-- [ ] Add stronger node avoidance and label avoidance
-- [ ] Add edge bundling for shared sources/sinks, especially logs/metrics/event queues
-- [ ] Add explicit fan-in/fan-out bus rendering
-- [ ] Add port assignment on node sides so edges do not all leave/enter the same cell
-- [ ] Add optional edge priority classes: primary flow vs telemetry vs error paths
-- [ ] Add graph simplification modes for huge diagrams: hide telemetry, collapse leaf groups, or render summaries
-
-### Required Mermaid/model support
-
-- [ ] Parse and preserve `subgraph` blocks
-- [ ] Add group/cluster nodes to the `Graph` IR
-- [ ] Lay out groups as swimlanes or boxed regions
-- [ ] Keep related nodes spatially local inside groups
-- [ ] Support group-level edges where possible
+- [ ] Add routing diagnostics and stress fixtures before changing behavior
+- [ ] Move edge routing decisions into layout-owned route metadata; keep renderer as glyph painter with a fallback path
+- [ ] Assign explicit node-side ports for fan-in, fan-out, long edges, and back-edges
+- [ ] Add global orthogonal lane reservation with node/label/group obstacles and route costs
+- [ ] Bundle shared sinks/sources into bus trunks and short spokes, especially logs/metrics/alerts/events/queues
+- [ ] Classify telemetry/secondary edges, route them after primary flow, prefer perimeter/bundled lanes, and prepare hide/collapse modes
+- [ ] Parse Mermaid `subgraph` blocks into Graph IR groups and render them as swimlanes or clusters
 
 ### Success criteria
 

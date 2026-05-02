@@ -13,6 +13,7 @@ This folder is the canonical project guide for agents and contributors.
 - `model.md` — shared graph IR: nodes, edges, shapes, styles, and layout fields.
 - `parser.md` — Mermaid flowchart parsing scope and expected behavior.
 - `layout.md` — current layout strategy, known limits, and future layout direction.
+- `phase-1.5-layout.md` — focused implementation plan for complex layout/routing.
 - `rendering.md` — terminal rendering approach, aesthetic direction, and Ratatui testing.
 - `interaction.md` — planned interactive TUI state, navigation, viewport, and input model.
 - `agent-integration.md` — Visual REPL, JSON IPC, and Pi integration plan.
