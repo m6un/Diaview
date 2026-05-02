@@ -175,8 +175,8 @@ mod tests {
         let graph =
             crate::parser::mermaid::parse(fixtures::complex_architecture_mermaid()).unwrap();
 
-        assert_eq!(graph.nodes.len(), 33);
-        assert_eq!(graph.edges.len(), 32);
+        assert_eq!(graph.nodes.len(), 66);
+        assert_eq!(graph.edges.len(), 87);
         assert!(graph.nodes.iter().any(|node| node.id == "ROUTER"));
         assert!(graph.nodes.iter().any(|node| node.id == "SUCCESS"));
     }

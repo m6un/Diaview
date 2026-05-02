@@ -1,78 +1,170 @@
 flowchart TD
     CLIENT((Client))
-    EDGE[Edge Gateway]
-    SAFE{Safe Request?}
+    DNS[Global DNS]
+    CDN[CDN Cache]
+    WAF{WAF Allows?}
     BLOCKED[Blocked Response]
+    EDGE[Edge Gateway]
+    TLS[Terminate TLS]
+    SAFE{Safe Request?}
+    BOT{Bot Score OK?}
+    CAPTCHA[Challenge Client]
     AUTH{Authenticated?}
     LOGIN[Login Required]
     LIMIT{Rate Limit OK?}
     THROTTLED[Throttled Response]
     ROUTER[Request Router]
+    TRACE[Trace Context]
+    AUDIT_LOG[Audit Log]
 
     PROFILE[Profile API]
     PROFILE_CACHE[Read Profile Cache]
     PROFILE_DB[Load User Record]
+    PROFILE_PREFS[Load Preferences]
+    PROFILE_FLAGS[Evaluate Feature Flags]
     PROFILE_RESULT[Return Profile]
 
     SEARCH[Search API]
     QUERY_PARSE[Parse Query]
+    SPELLCHECK[Spellcheck Query]
+    SEARCH_CACHE{Cached Results?}
     SEARCH_INDEX[Query Search Index]
+    RANKER[Rank Results]
     PRODUCT_LOAD[Load Product Details]
+    ADS[Fetch Sponsored Results]
     SEARCH_RESULT[Return Results]
 
     CART[Cart API]
     CART_READ[Read Cart]
     CART_VALIDATE{Items Valid?}
+    CART_PRICE[Price Items]
+    CART_PROMO[Apply Promotions]
     CART_ERROR[Return Cart Error]
     CART_SAVE[Save Cart]
+    CART_EVENT[Publish Cart Event]
     CART_RESULT[Return Cart]
 
     CHECKOUT[Checkout API]
     STOCK{Stock Available?}
+    RESERVE[Reserve Inventory]
     OUT_STOCK[Out Of Stock]
     FRAUD{Fraud Check OK?}
     REVIEW[Manual Review]
     PAYMENT[Charge Payment]
+    PAYMENT_RETRY{Retry Payment?}
+    PAYMENT_FAIL[Payment Failed]
     ORDER[Create Order]
     RECEIPT[Send Receipt]
     SUCCESS((Success))
 
-    CLIENT --> EDGE
-    EDGE --> SAFE
+    RECOMMEND[Recommendation API]
+    REC_PROFILE[Load User Signals]
+    REC_MODEL[Score Candidates]
+    REC_FILTER[Filter Inventory]
+    REC_RESULT[Return Recommendations]
+
+    NOTIFY[Notification Worker]
+    EMAIL[Email Service]
+    PUSH[Push Service]
+    WAREHOUSE[Warehouse Queue]
+    SHIP[Shipping Service]
+    ANALYTICS[Analytics Pipeline]
+    METRICS[Metrics Sink]
+    DEADLETTER[Dead Letter Queue]
+
+    CLIENT --> DNS
+    DNS --> CDN
+    CDN --> WAF
+    WAF -->|no| BLOCKED
+    WAF -->|yes| EDGE
+    EDGE --> TLS
+    TLS --> SAFE
 
     SAFE -->|no| BLOCKED
-    SAFE -->|yes| AUTH
+    SAFE -->|yes| BOT
+    BOT -->|no| CAPTCHA
+    BOT -->|yes| AUTH
+    CAPTCHA -.->|passed| AUTH
+    CAPTCHA -.->|failed| BLOCKED
 
     AUTH -->|no| LOGIN
     AUTH -->|yes| LIMIT
-
     LIMIT -->|no| THROTTLED
     LIMIT -->|yes| ROUTER
+    ROUTER ==> TRACE
+    TRACE --- AUDIT_LOG
 
     ROUTER -->|profile| PROFILE
     PROFILE --> PROFILE_CACHE
-    PROFILE_CACHE --> PROFILE_DB
-    PROFILE_DB --> PROFILE_RESULT
+    PROFILE_CACHE -->|hit| PROFILE_PREFS
+    PROFILE_CACHE -.->|miss| PROFILE_DB
+    PROFILE_DB --> PROFILE_PREFS
+    PROFILE_PREFS --> PROFILE_FLAGS
+    PROFILE_FLAGS --> PROFILE_RESULT
+    PROFILE_RESULT -.->|view event| ANALYTICS
 
     ROUTER -->|search| SEARCH
     SEARCH --> QUERY_PARSE
-    QUERY_PARSE --> SEARCH_INDEX
-    SEARCH_INDEX --> PRODUCT_LOAD
-    PRODUCT_LOAD --> SEARCH_RESULT
+    QUERY_PARSE --> SPELLCHECK
+    SPELLCHECK --> SEARCH_CACHE
+    SEARCH_CACHE -->|hit| RANKER
+    SEARCH_CACHE -.->|miss| SEARCH_INDEX
+    SEARCH_INDEX --> RANKER
+    RANKER --> PRODUCT_LOAD
+    PRODUCT_LOAD --> ADS
+    ADS --> SEARCH_RESULT
+    SEARCH_RESULT -.->|search event| ANALYTICS
 
     ROUTER -->|cart| CART
     CART --> CART_READ
     CART_READ --> CART_VALIDATE
     CART_VALIDATE -->|no| CART_ERROR
-    CART_VALIDATE -->|yes| CART_SAVE
-    CART_SAVE --> CART_RESULT
+    CART_VALIDATE -->|yes| CART_PRICE
+    CART_PRICE --> CART_PROMO
+    CART_PROMO --> CART_SAVE
+    CART_SAVE ==> CART_EVENT
+    CART_EVENT -.-> ANALYTICS
+    CART_EVENT --> CART_RESULT
 
     ROUTER -->|checkout| CHECKOUT
     CHECKOUT --> STOCK
     STOCK -->|no| OUT_STOCK
-    STOCK -->|yes| FRAUD
+    STOCK -->|yes| RESERVE
+    RESERVE --> FRAUD
     FRAUD -->|no| REVIEW
+    REVIEW -.->|approved| PAYMENT
+    REVIEW -.->|rejected| PAYMENT_FAIL
     FRAUD -->|yes| PAYMENT
-    PAYMENT --> ORDER
+    PAYMENT --> PAYMENT_RETRY
+    PAYMENT_RETRY -->|yes| PAYMENT
+    PAYMENT_RETRY -->|no| PAYMENT_FAIL
+    PAYMENT ==> ORDER
     ORDER --> RECEIPT
     RECEIPT --> SUCCESS
+    ORDER --> WAREHOUSE
+    ORDER -.-> ANALYTICS
+
+    ROUTER -->|recommend| RECOMMEND
+    RECOMMEND --> REC_PROFILE
+    REC_PROFILE --> REC_MODEL
+    REC_MODEL --> REC_FILTER
+    REC_FILTER --> REC_RESULT
+    REC_RESULT -.->|impression event| ANALYTICS
+
+    ORDER --> NOTIFY
+    NOTIFY --> EMAIL
+    NOTIFY --> PUSH
+    WAREHOUSE --> SHIP
+    SHIP -.->|status update| NOTIFY
+
+    AUTH -.->|security event| AUDIT_LOG
+    LIMIT -.->|limit event| METRICS
+    PAYMENT_FAIL -.-> DEADLETTER
+    OUT_STOCK -.-> DEADLETTER
+    CART_ERROR -.-> DEADLETTER
+    BLOCKED -.-> METRICS
+    THROTTLED -.-> METRICS
+    AUDIT_LOG --> METRICS
+    ANALYTICS --> METRICS
+    DEADLETTER -.- AUDIT_LOG
+    SUCCESS --- METRICS

@@ -14,9 +14,13 @@ fn main() {
         }
     }
 
-    let input = path
-        .map(|path| std::fs::read_to_string(&path).expect("Failed to read file"))
-        .unwrap_or_else(|| fixtures::complex_architecture_mermaid().to_string());
+    let input = match path {
+        Some(path) => std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            eprintln!("Failed to read file '{path}': {e}");
+            std::process::exit(1);
+        }),
+        None => fixtures::complex_architecture_mermaid().to_string(),
+    };
 
     let mut graph = mermaid::parse(&input).unwrap_or_else(|e| {
         eprintln!("Parse error: {e}");
