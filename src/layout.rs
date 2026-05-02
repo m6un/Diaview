@@ -30,16 +30,49 @@ const DIAMOND_FACTOR: f64 = 1.0;
 
 // ── Public API ──────────────────────────────────────────────────────────────
 
-/// Lay out every node in `graph`, filling in `x`, `y`, `width`, `height`.
+/// A graph layout implementation.
 ///
-/// The algorithm:
+/// Layout engines prepare a parsed [`Graph`] for rendering by assigning node
+/// positions and sizes, and may insert helper routing nodes when needed.
+pub trait LayoutEngine {
+    /// Lay out every node in `graph`, filling in `x`, `y`, `width`, `height`.
+    fn layout(&self, graph: &mut Graph);
+}
+
+/// Diaview's current native layered layout engine.
+///
+/// This preserves the pre-abstraction layout behavior while providing a stable
+/// extension point for future engines.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct SimpleLayoutEngine;
+
+impl LayoutEngine for SimpleLayoutEngine {
+    fn layout(&self, graph: &mut Graph) {
+        layout_graph(graph);
+    }
+}
+
+/// Lay out `graph` with the default [`SimpleLayoutEngine`].
+///
+/// Kept as the ergonomic public API for callers that do not need to choose an
+/// engine explicitly.
+pub fn layout(graph: &mut Graph) {
+    layout_with(&SimpleLayoutEngine, graph);
+}
+
+/// Lay out `graph` with a caller-provided layout engine.
+pub fn layout_with<E: LayoutEngine + ?Sized>(engine: &E, graph: &mut Graph) {
+    engine.layout(graph);
+}
+
+/// The default engine algorithm:
 /// 1. Size every node from its label + padding.
 /// 2. Assign layers via BFS from root nodes (no incoming edges).
 /// 3. Order nodes within each layer (insertion-stable, with a barycenter
 ///    heuristic to reduce edge crossings).
 /// 4. Assign coordinates: layer index controls the "main axis" position;
 ///    position within the layer controls the "cross axis".
-pub fn layout(graph: &mut Graph) {
+fn layout_graph(graph: &mut Graph) {
     if graph.nodes.is_empty() {
         return;
     }
@@ -89,12 +122,18 @@ fn size_nodes(nodes: &mut [Node]) {
             NodeShape::Diamond => {
                 let mut w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
                 let h = 1.0 + PADDING_V * 2.0;
-                w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
+                w = w.ceil();
+                if w as i64 % 2 != 0 {
+                    w += 1.0;
+                }
                 (w, h)
             }
             NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect => {
                 let mut w = label_len + PADDING_H * 2.0 + 2.0;
-                w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
+                w = w.ceil();
+                if w as i64 % 2 != 0 {
+                    w += 1.0;
+                }
                 let h = 1.0 + PADDING_V * 2.0;
                 (w, h)
             }
@@ -117,10 +156,8 @@ fn assign_layers(graph: &Graph, id_to_idx: &HashMap<String, usize>) -> Vec<Vec<u
     let mut in_degree: Vec<usize> = vec![0; n];
 
     for edge in &graph.edges {
-        if let (Some(&src), Some(&tgt)) = (
-            id_to_idx.get(&edge.source),
-            id_to_idx.get(&edge.target),
-        ) {
+        if let (Some(&src), Some(&tgt)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
+        {
             children[src].push(tgt);
             in_degree[tgt] += 1;
         }
@@ -184,7 +221,11 @@ fn assign_layers(graph: &Graph, id_to_idx: &HashMap<String, usize>) -> Vec<Vec<u
         let layer = if parents[u].is_empty() {
             0
         } else {
-            parents[u].iter().map(|&p| node_layer[p] + 1).max().unwrap_or(0)
+            parents[u]
+                .iter()
+                .map(|&p| node_layer[p] + 1)
+                .max()
+                .unwrap_or(0)
         };
         node_layer[u] = layer;
     }
@@ -201,7 +242,11 @@ fn assign_layers(graph: &Graph, id_to_idx: &HashMap<String, usize>) -> Vec<Vec<u
 
 // ── Step 2.5: dummy node insertion for long edges ───────────────────────────
 
-fn insert_dummies(graph: &mut Graph, layers: &mut Vec<Vec<usize>>, id_to_idx: &HashMap<String, usize>) {
+fn insert_dummies(
+    graph: &mut Graph,
+    layers: &mut Vec<Vec<usize>>,
+    id_to_idx: &HashMap<String, usize>,
+) {
     // Reverse map to easily find node layer
     let mut node_to_layer = HashMap::new();
     for (l, layer) in layers.iter().enumerate() {
@@ -226,7 +271,7 @@ fn insert_dummies(graph: &mut Graph, layers: &mut Vec<Vec<usize>>, id_to_idx: &H
 
                 for l in (l_u + 1)..l_v {
                     let dummy_id = format!("__dummy_{}_{}_{}", edge.source, edge.target, l);
-                    
+
                     // Avoid inserting the same dummy multiple times
                     if !id_to_idx.contains_key(&dummy_id) {
                         let dummy_node = Node {
@@ -253,7 +298,11 @@ fn insert_dummies(graph: &mut Graph, layers: &mut Vec<Vec<usize>>, id_to_idx: &H
                         source: current_src.clone(),
                         target: dummy_id.clone(),
                         // Place label on the first segment only
-                        label: if current_src == edge.source { edge.label.clone() } else { None },
+                        label: if current_src == edge.source {
+                            edge.label.clone()
+                        } else {
+                            None
+                        },
                         style: edge.style.clone(),
                         // Only the final segment gets the arrowhead
                         arrowhead: crate::model::Arrowhead::None,
@@ -302,10 +351,8 @@ fn order_layers(
     let mut children: Vec<Vec<usize>> = vec![vec![]; n];
     let mut parents: Vec<Vec<usize>> = vec![vec![]; n];
     for edge in &graph.edges {
-        if let (Some(&src), Some(&tgt)) = (
-            id_to_idx.get(&edge.source),
-            id_to_idx.get(&edge.target),
-        ) {
+        if let (Some(&src), Some(&tgt)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
+        {
             children[src].push(tgt);
             parents[tgt].push(src);
         }
@@ -379,11 +426,7 @@ fn order_layers(
 
 // ── Step 4: coordinate assignment ───────────────────────────────────────────
 
-fn assign_positions(
-    graph: &mut Graph,
-    layers: &[Vec<usize>],
-    _id_to_idx: &HashMap<String, usize>,
-) {
+fn assign_positions(graph: &mut Graph, layers: &[Vec<usize>], _id_to_idx: &HashMap<String, usize>) {
     if layers.is_empty() {
         return;
     }
@@ -424,10 +467,7 @@ fn assign_positions(
         })
         .collect();
 
-    let max_cross_span = layer_spans
-        .iter()
-        .copied()
-        .fold(0.0_f64, f64::max);
+    let max_cross_span = layer_spans.iter().copied().fold(0.0_f64, f64::max);
 
     // Main-axis cursor.
     let mut main_cursor: f64 = 0.0;
@@ -456,11 +496,19 @@ fn assign_positions(
 
             let (x, y) = if is_lr {
                 // main axis = x (layer index), cross axis = y
-                let x = if is_dummy { main_cursor + max_main_extent / 2.0 } else { main_cursor };
+                let x = if is_dummy {
+                    main_cursor + max_main_extent / 2.0
+                } else {
+                    main_cursor
+                };
                 (x, cross_cursor)
             } else {
                 // main axis = y (layer index), cross axis = x
-                let y = if is_dummy { main_cursor + max_main_extent / 2.0 } else { main_cursor };
+                let y = if is_dummy {
+                    main_cursor + max_main_extent / 2.0
+                } else {
+                    main_cursor
+                };
                 (cross_cursor, y)
             };
 
@@ -550,26 +598,10 @@ mod tests {
     /// Assert every node has Some values for x, y, width, height.
     fn assert_all_positioned(graph: &Graph) {
         for node in &graph.nodes {
-            assert!(
-                node.x.is_some(),
-                "node {} missing x",
-                node.id
-            );
-            assert!(
-                node.y.is_some(),
-                "node {} missing y",
-                node.id
-            );
-            assert!(
-                node.width.is_some(),
-                "node {} missing width",
-                node.id
-            );
-            assert!(
-                node.height.is_some(),
-                "node {} missing height",
-                node.id
-            );
+            assert!(node.x.is_some(), "node {} missing x", node.id);
+            assert!(node.y.is_some(), "node {} missing y", node.id);
+            assert!(node.width.is_some(), "node {} missing width", node.id);
+            assert!(node.height.is_some(), "node {} missing height", node.id);
         }
     }
 
@@ -803,6 +835,27 @@ mod tests {
             t.height.unwrap() >= MIN_HEIGHT,
             "Height should be at least MIN_HEIGHT"
         );
+    }
+
+    #[test]
+    fn test_simple_layout_engine_matches_default_entrypoint() {
+        let mut via_default = fixtures::diamond_decision();
+        let mut via_engine = fixtures::diamond_decision();
+
+        layout(&mut via_default);
+        layout_with(&SimpleLayoutEngine, &mut via_engine);
+
+        assert_eq!(via_engine, via_default);
+    }
+
+    #[test]
+    fn test_layout_engine_trait_object() {
+        let engine: &dyn LayoutEngine = &SimpleLayoutEngine;
+        let mut g = fixtures::simple_two_node();
+
+        layout_with(engine, &mut g);
+
+        assert_all_positioned(&g);
     }
 
     #[test]

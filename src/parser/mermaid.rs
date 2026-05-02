@@ -66,7 +66,10 @@ fn parse_header<'a>(lines: &'a [String]) -> Result<(Direction, &'a [String]), St
     }
     let keyword = tokens[0].to_lowercase();
     if keyword != "graph" && keyword != "flowchart" {
-        return Err(format!("expected 'graph' or 'flowchart', got '{}'", tokens[0]));
+        return Err(format!(
+            "expected 'graph' or 'flowchart', got '{}'",
+            tokens[0]
+        ));
     }
     let dir = match tokens[1] {
         "TD" | "TB" => Direction::TopDown,
@@ -210,18 +213,7 @@ fn try_parse_edge(
 /// Handle the `A -- text --> B` / `A -- text --- B` inline-label form.
 fn try_inline_label_edge(
     stmt: &str,
-) -> Result<
-    Option<(
-        String,
-        NodeShape,
-        String,
-        String,
-        NodeShape,
-        String,
-        Edge,
-    )>,
-    String,
-> {
+) -> Result<Option<(String, NodeShape, String, String, NodeShape, String, Edge)>, String> {
     // Look for ` -- ` (with surrounding content).
     let Some(dash_pos) = stmt.find(" -- ") else {
         return Ok(None);
