@@ -1392,6 +1392,13 @@ mod tests {
         )
         .unwrap();
         crate::layout::layout(&mut graph);
-        dump_graph("complex architecture", &graph, 180, 70);
+
+        let (width, height) = graph_bounds(&graph);
+        println!(
+            "complex architecture fixture: {} nodes, {} edges, bounds {width}x{height}",
+            graph.nodes.len(),
+            graph.edges.len()
+        );
+        dump_graph("complex architecture", &graph, width, height);
     }
 }

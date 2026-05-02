@@ -45,25 +45,37 @@ pub mod fixtures {
                     id: "A".into(),
                     label: "Start".into(),
                     shape: NodeShape::RoundedRect,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "B".into(),
                     label: "Decision".into(),
                     shape: NodeShape::Diamond,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "C".into(),
                     label: "Yes path".into(),
                     shape: NodeShape::Rectangle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "D".into(),
                     label: "No path".into(),
                     shape: NodeShape::Rectangle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
             ],
             edges: vec![
@@ -92,14 +104,13 @@ pub mod fixtures {
         }
     }
 
-    /// A more complex Mermaid flowchart fixture used for visual renderer dumps.
+    /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
+    pub const COMPLEX_ARCHITECTURE_MERMAID: &str =
+        include_str!("../fixtures/complex_architecture.mmd");
+
+    /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
     pub fn complex_architecture_mermaid() -> &'static str {
-"graph LR
-    A[Square Rect] -- Link text --> B((Circle))
-    A --> C(Round Rect)
-    B --> D{Rhombus}
-    C --> D
-"
+        COMPLEX_ARCHITECTURE_MERMAID
     }
 
     /// Left-right direction, 3 nodes in a chain
@@ -111,19 +122,28 @@ pub mod fixtures {
                     id: "A".into(),
                     label: "Input".into(),
                     shape: NodeShape::Rectangle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "B".into(),
                     label: "Process".into(),
                     shape: NodeShape::RoundedRect,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
                 Node {
                     id: "C".into(),
                     label: "Output".into(),
                     shape: NodeShape::Circle,
-                    x: None, y: None, width: None, height: None,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
                 },
             ],
             edges: vec![
@@ -143,5 +163,21 @@ pub mod fixtures {
                 },
             ],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixtures;
+
+    #[test]
+    fn complex_architecture_fixture_parses() {
+        let graph =
+            crate::parser::mermaid::parse(fixtures::complex_architecture_mermaid()).unwrap();
+
+        assert_eq!(graph.nodes.len(), 33);
+        assert_eq!(graph.edges.len(), 32);
+        assert!(graph.nodes.iter().any(|node| node.id == "ROUTER"));
+        assert!(graph.nodes.iter().any(|node| node.id == "SUCCESS"));
     }
 }
