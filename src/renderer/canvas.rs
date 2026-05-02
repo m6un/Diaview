@@ -10,31 +10,12 @@ use ratatui::{
     backend::{CrosstermBackend, TestBackend},
     layout::Rect,
     style::{Color, Style},
-    text::{Line, Text},
-    widgets::{Block, BorderType, Borders, Paragraph},
+    text::{Line, Span, Text},
+    widgets::Paragraph,
 };
 
 use crate::model::{Arrowhead, Direction, EdgeStyle, Graph, Node, NodeShape};
-
-/// Color per node shape for visual distinction.
-fn shape_color(shape: &NodeShape) -> Color {
-    match shape {
-        NodeShape::RoundedRect => Color::Cyan,
-        NodeShape::Rectangle => Color::Blue,
-        NodeShape::Diamond => Color::Yellow,
-        NodeShape::Circle => Color::Green,
-    }
-}
-
-/// Border type per node shape.
-fn shape_border_type(shape: &NodeShape) -> BorderType {
-    match shape {
-        NodeShape::RoundedRect => BorderType::Rounded,
-        NodeShape::Rectangle => BorderType::Plain,
-        NodeShape::Diamond => BorderType::Double,
-        NodeShape::Circle => BorderType::Rounded,
-    }
-}
+use crate::theme::{NodeTheme, Theme};
 
 /// Full terminal render — sets up crossterm, renders, waits for keypress, cleans up.
 pub fn render(graph: &Graph) -> io::Result<()> {
@@ -73,26 +54,38 @@ pub fn render_inline(graph: &Graph) -> io::Result<()> {
 
 /// Render the whole graph into a string. Exposed for tests and inline mode.
 pub fn render_to_string(graph: &Graph) -> io::Result<String> {
+    let theme = Theme::default();
+    render_to_string_with_theme(graph, &theme)
+}
+
+/// Render the whole graph into a string using a specific theme.
+pub fn render_to_string_with_theme(graph: &Graph, theme: &Theme) -> io::Result<String> {
     let (width, height) = graph_bounds(graph);
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend)?;
-    terminal.draw(|frame| render_to_frame(graph, frame))?;
+    terminal.draw(|frame| render_to_frame_with_theme(graph, frame, theme))?;
     let buf = terminal.backend().buffer();
 
     let mut out = String::new();
     for y in 0..buf.area.height {
-        let last_non_space = (0..buf.area.width)
-            .rev()
-            .find(|&x| buf[(x, y)].symbol() != " ");
+        let last_visible = (0..buf.area.width).rev().find(|&x| {
+            let cell = &buf[(x, y)];
+            cell.symbol() != " " || cell.bg != Color::Reset
+        });
 
-        let Some(last_x) = last_non_space else {
+        let Some(last_x) = last_visible else {
             out.push('\n');
             continue;
         };
 
         let mut current_fg = Color::Reset;
+        let mut current_bg = Color::Reset;
         for x in 0..=last_x {
             let cell = &buf[(x, y)];
+            if cell.bg != current_bg {
+                out.push_str(&ansi_bg(cell.bg));
+                current_bg = cell.bg;
+            }
             if cell.fg != current_fg {
                 out.push_str(&ansi_fg(cell.fg));
                 current_fg = cell.fg;
@@ -101,6 +94,9 @@ pub fn render_to_string(graph: &Graph) -> io::Result<String> {
         }
         if current_fg != Color::Reset {
             out.push_str("\x1b[39m");
+        }
+        if current_bg != Color::Reset {
+            out.push_str("\x1b[49m");
         }
         out.push('\n');
     }
@@ -131,6 +127,30 @@ fn ansi_fg(color: Color) -> String {
     }
 }
 
+fn ansi_bg(color: Color) -> String {
+    match color {
+        Color::Reset => "\x1b[49m".to_string(),
+        Color::Black => "\x1b[40m".to_string(),
+        Color::Red => "\x1b[41m".to_string(),
+        Color::Green => "\x1b[42m".to_string(),
+        Color::Yellow => "\x1b[43m".to_string(),
+        Color::Blue => "\x1b[44m".to_string(),
+        Color::Magenta => "\x1b[45m".to_string(),
+        Color::Cyan => "\x1b[46m".to_string(),
+        Color::Gray => "\x1b[47m".to_string(),
+        Color::DarkGray => "\x1b[100m".to_string(),
+        Color::LightRed => "\x1b[101m".to_string(),
+        Color::LightGreen => "\x1b[102m".to_string(),
+        Color::LightYellow => "\x1b[103m".to_string(),
+        Color::LightBlue => "\x1b[104m".to_string(),
+        Color::LightMagenta => "\x1b[105m".to_string(),
+        Color::LightCyan => "\x1b[106m".to_string(),
+        Color::White => "\x1b[107m".to_string(),
+        Color::Rgb(r, g, b) => format!("\x1b[48;2;{r};{g};{b}m"),
+        Color::Indexed(i) => format!("\x1b[48;5;{i}m"),
+    }
+}
+
 fn graph_bounds(graph: &Graph) -> (u16, u16) {
     let mut max_x = 1.0_f64;
     let mut max_y = 1.0_f64;
@@ -147,70 +167,105 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
 
 /// Testable inner function — draws graph onto a Frame.
 pub fn render_to_frame(graph: &Graph, frame: &mut Frame) {
+    let theme = Theme::default();
+    render_to_frame_with_theme(graph, frame, &theme);
+}
+
+/// Draw the graph using a specific theme.
+pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    // Render crisp box-based nodes first.
+    // Tight, one-cell card shadows first.
     for node in &graph.nodes {
-        render_node(node, frame, area);
+        render_node_shadow(node, frame, area, theme);
     }
 
-    // Render edges on top so arrowheads aren't overwritten by borders.
-    render_edges(graph, frame, area);
+    // Render filled terminal-native cards.
+    for node in &graph.nodes {
+        render_node(node, frame, area, theme);
+    }
 
-
+    // Render edges on top so arrowheads remain visible at node boundaries.
+    render_edges(graph, frame, area, theme);
 }
 
-/// Render a single node as a clean terminal-native boxed shape.
-fn render_node(node: &Node, frame: &mut Frame, area: Rect) {
+/// Render a very subtle one-cell cast shadow behind a card.
+fn render_node_shadow(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
     if node.id.starts_with("__dummy") {
         return;
     }
 
-    let (x, y, w, h) = match (node.x, node.y, node.width, node.height) {
-        (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
-        _ => return, // skip nodes without layout
+    let rect = match node_rect(node) {
+        Some(rect) if rect_inside(rect, area) => rect,
+        _ => return,
     };
 
-    let rect = Rect::new(x as u16, y as u16, w as u16, h as u16);
-    // Ratatui widgets expect their render area to be inside the frame buffer.
-    // Large diagrams can extend below/right of the current terminal viewport;
-    // skip off-screen/partially clipped nodes until we add pan/scroll support.
-    if rect.x < area.x
-        || rect.y < area.y
-        || rect.x.saturating_add(rect.width) > area.x.saturating_add(area.width)
-        || rect.y.saturating_add(rect.height) > area.y.saturating_add(area.height)
-    {
-        return;
+    let buf = frame.buffer_mut();
+    let style = Style::default().fg(theme.shadow).bg(Color::Reset);
+
+    // Thin right-side shadow. Keep it lighter than the bottom shadow so it
+    // reads as a subtle side falloff rather than an outline.
+    let shadow_x = rect.x.saturating_add(rect.width);
+    if shadow_x < area.right() {
+        for y in rect.y.saturating_add(1)..rect.y.saturating_add(rect.height) {
+            if y < area.bottom() {
+                buf[(shadow_x, y)].set_char('▏').set_style(style);
+            }
+        }
     }
 
-    let color = shape_color(&node.shape);
-
-    let border_type = shape_border_type(&node.shape);
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_type(border_type)
-        .border_style(Style::default().fg(color));
-
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-
-    if inner.width > 0 && inner.height > 0 {
-        let display_label = match node.shape {
-            NodeShape::Diamond => format!("◆ {}", node.label),
-            NodeShape::Circle => format!("● {}", node.label),
-            _ => node.label.clone(),
-        };
-        let label = center_label(&display_label, inner);
-        frame.render_widget(label, inner);
+    // Thin bottom shadow spanning the card width. This is much less heavy than
+    // bg-filled cells because `▔` only occupies a small top slice of the cell.
+    let shadow_y = rect.y.saturating_add(rect.height);
+    if shadow_y < area.bottom() {
+        for x in rect.x..rect.x.saturating_add(rect.width) {
+            if x < area.right() {
+                buf[(x, shadow_y)].set_char('▔').set_style(style);
+            }
+        }
     }
 }
 
-/// Create a Paragraph that centers the text both horizontally and vertically within the area.
-fn center_label(text: &str, area: Rect) -> Paragraph<'_> {
+/// Render a single node as a borderless, filled terminal card.
+fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
+    if node.id.starts_with("__dummy") {
+        return;
+    }
+
+    let rect = match node_rect(node) {
+        Some(rect) if rect_inside(rect, area) => rect,
+        _ => return, // skip nodes without layout or outside viewport
+    };
+
+    let node_theme = theme.node(&node.shape);
+    frame
+        .buffer_mut()
+        .set_style(rect, Style::default().bg(node_theme.fill));
+
+    let label = center_label(node, node_theme, rect);
+    frame.render_widget(label, rect);
+}
+
+fn node_rect(node: &Node) -> Option<Rect> {
+    let (x, y, w, h) = match (node.x, node.y, node.width, node.height) {
+        (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
+        _ => return None,
+    };
+    Some(Rect::new(x as u16, y as u16, w as u16, h as u16))
+}
+
+fn rect_inside(rect: Rect, area: Rect) -> bool {
+    rect.x >= area.x
+        && rect.y >= area.y
+        && rect.x.saturating_add(rect.width) <= area.x.saturating_add(area.width)
+        && rect.y.saturating_add(rect.height) <= area.y.saturating_add(area.height)
+}
+
+/// Create a Paragraph that centers the node label both horizontally and vertically.
+fn center_label(node: &Node, node_theme: NodeTheme, area: Rect) -> Paragraph<'_> {
     // Vertical centering: compute top padding as blank lines
     let v_pad = if area.height > 1 {
         (area.height.saturating_sub(1)) / 2
@@ -222,21 +277,38 @@ fn center_label(text: &str, area: Rect) -> Paragraph<'_> {
     for _ in 0..v_pad {
         lines.push(Line::from(""));
     }
-    lines.push(Line::from(text).centered());
 
-    Paragraph::new(Text::from(lines))
+    let label_line = match node.shape {
+        NodeShape::Diamond => Line::from(vec![
+            Span::styled("◆", Style::default().fg(node_theme.icon)),
+            Span::raw(" "),
+            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
+        ]),
+        NodeShape::Circle => Line::from(vec![
+            Span::styled("●", Style::default().fg(node_theme.icon)),
+            Span::raw(" "),
+            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
+        ]),
+        NodeShape::Rectangle | NodeShape::RoundedRect => Line::from(Span::styled(
+            node.label.clone(),
+            Style::default().fg(node_theme.text),
+        )),
+    }
+    .centered();
+
+    lines.push(label_line);
+
+    Paragraph::new(Text::from(lines)).style(Style::default().fg(node_theme.text))
 }
 
-
-
 /// Render all edges in the graph.
-fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect) {
+fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect, theme: &Theme) {
     for edge in &graph.edges {
         let source = graph.nodes.iter().find(|n| n.id == edge.source);
         let target = graph.nodes.iter().find(|n| n.id == edge.target);
 
         if let (Some(src), Some(tgt)) = (source, target) {
-            render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes);
+            render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes, theme);
         }
     }
 }
@@ -317,9 +389,14 @@ fn connection_point(
 
 /// Fallback heuristic: pick the border side closest to the target point.
 fn connection_point_heuristic(
-    x: u16, y: u16, w: u16, h: u16,
-    cx: u16, cy: u16,
-    toward_x: u16, toward_y: u16,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    cx: u16,
+    cy: u16,
+    toward_x: u16,
+    toward_y: u16,
 ) -> Option<(u16, u16)> {
     let dx = toward_x as i32 - cx as i32;
     let dy = toward_y as i32 - cy as i32;
@@ -362,11 +439,7 @@ fn arrowhead_char(dx: i32, dy: i32, arrowhead: &Arrowhead) -> Option<char> {
         Arrowhead::None => None,
         Arrowhead::Normal | Arrowhead::Open => {
             if dy.abs() >= dx.abs() {
-                if dy > 0 {
-                    Some('▼')
-                } else {
-                    Some('▲')
-                }
+                if dy > 0 { Some('▼') } else { Some('▲') }
             } else if dx > 0 {
                 Some('▶')
             } else {
@@ -454,8 +527,7 @@ fn glyph_dirs(ch: char) -> u8 {
 /// Check if a cell position is inside any node's bounding box.
 fn is_inside_any_node(px: u16, py: u16, nodes: &[Node]) -> bool {
     for node in nodes {
-        if let (Some(nx), Some(ny), Some(nw), Some(nh)) =
-            (node.x, node.y, node.width, node.height)
+        if let (Some(nx), Some(ny), Some(nw), Some(nh)) = (node.x, node.y, node.width, node.height)
         {
             let nx = nx as u16;
             let ny = ny as u16;
@@ -477,6 +549,7 @@ fn render_edge(
     frame: &mut Frame,
     direction: &Direction,
     all_nodes: &[Node],
+    theme: &Theme,
 ) {
     let src_center = match node_center(src) {
         Some(c) => c,
@@ -491,7 +564,14 @@ fn render_edge(
         Some(p) => p,
         None => return,
     };
-    let end = match connection_point(tgt, src_center.0, src_center.1, direction, false, src.id.starts_with("__dummy")) {
+    let end = match connection_point(
+        tgt,
+        src_center.0,
+        src_center.1,
+        direction,
+        false,
+        src.id.starts_with("__dummy"),
+    ) {
         Some(p) => p,
         None => return,
     };
@@ -499,12 +579,17 @@ fn render_edge(
     let buf = frame.buffer_mut();
     let buf_area = buf.area;
 
-    let edge_style = Style::default().fg(Color::DarkGray);
+    let edge_style = Style::default().fg(theme.edge).bg(Color::Reset);
 
     // Helper: set a cell only if it's in bounds and NOT inside any node's bounding box.
     // Solid edge glyphs merge with existing solid edge glyphs so shared branches form
     // proper junctions (`┴`, `┬`, `┼`, etc.) instead of overwriting each other.
-    let set_cell = |buf: &mut ratatui::buffer::Buffer, px: u16, py: u16, ch: char, style: Style, nodes: &[Node]| {
+    let set_cell = |buf: &mut ratatui::buffer::Buffer,
+                    px: u16,
+                    py: u16,
+                    ch: char,
+                    style: Style,
+                    nodes: &[Node]| {
         if px < buf.area.x + buf.area.width
             && py < buf.area.y + buf.area.height
             && py >= buf.area.y
@@ -514,7 +599,9 @@ fn render_edge(
                 let existing_dirs = char_to_dirs(buf[(px, py)].symbol());
                 let new_dirs = glyph_dirs(ch);
                 if existing_dirs != 0 && new_dirs != 0 {
-                    buf[(px, py)].set_char(dirs_to_char(existing_dirs | new_dirs)).set_style(style);
+                    buf[(px, py)]
+                        .set_char(dirs_to_char(existing_dirs | new_dirs))
+                        .set_style(style);
                     return;
                 }
             }
@@ -537,7 +624,14 @@ fn render_edge(
         let (y0, y1) = min_max(start.1, mid_y);
         for y in y0..=y1 {
             if start.0 == end.0 || y != mid_y {
-                set_cell(buf, start.0, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                set_cell(
+                    buf,
+                    start.0,
+                    y,
+                    edge_v_char(&edge.style),
+                    edge_style,
+                    all_nodes,
+                );
             }
         }
 
@@ -546,7 +640,14 @@ fn render_edge(
             let (x0, x1) = min_max(start.0, end.0);
             for x in x0..=x1 {
                 if x != start.0 && x != end.0 {
-                    set_cell(buf, x, mid_y, edge_h_char(&edge.style), edge_style, all_nodes);
+                    set_cell(
+                        buf,
+                        x,
+                        mid_y,
+                        edge_h_char(&edge.style),
+                        edge_style,
+                        all_nodes,
+                    );
                 }
             }
             // Corners
@@ -575,7 +676,14 @@ fn render_edge(
         let (y0, y1) = min_max(mid_y, end.1);
         for y in y0..=y1 {
             if start.0 == end.0 || y != mid_y {
-                set_cell(buf, end.0, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                set_cell(
+                    buf,
+                    end.0,
+                    y,
+                    edge_v_char(&edge.style),
+                    edge_style,
+                    all_nodes,
+                );
             }
         }
 
@@ -600,7 +708,14 @@ fn render_edge(
         let (x0, x1) = min_max(start.0, mid_x);
         for x in x0..=x1 {
             if start.1 == end.1 || x != mid_x {
-                set_cell(buf, x, start.1, edge_h_char(&edge.style), edge_style, all_nodes);
+                set_cell(
+                    buf,
+                    x,
+                    start.1,
+                    edge_h_char(&edge.style),
+                    edge_style,
+                    all_nodes,
+                );
             }
         }
 
@@ -609,7 +724,14 @@ fn render_edge(
             let (y0, y1) = min_max(start.1, end.1);
             for y in y0..=y1 {
                 if y != start.1 && y != end.1 {
-                    set_cell(buf, mid_x, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                    set_cell(
+                        buf,
+                        mid_x,
+                        y,
+                        edge_v_char(&edge.style),
+                        edge_style,
+                        all_nodes,
+                    );
                 }
             }
             // Corners
@@ -638,7 +760,14 @@ fn render_edge(
         let (x0, x1) = min_max(mid_x, end.0);
         for x in x0..=x1 {
             if start.1 == end.1 || x != mid_x {
-                set_cell(buf, x, end.1, edge_h_char(&edge.style), edge_style, all_nodes);
+                set_cell(
+                    buf,
+                    x,
+                    end.1,
+                    edge_h_char(&edge.style),
+                    edge_style,
+                    all_nodes,
+                );
             }
         }
 
@@ -667,7 +796,9 @@ fn render_edge(
     // Arrowhead at the end point — always draw (even near nodes) so it's visible
     if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
         if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
-            buf[(end.0, end.1)].set_char(arrow).set_style(Style::default().fg(Color::White));
+            buf[(end.0, end.1)]
+                .set_char(arrow)
+                .set_style(Style::default().fg(theme.arrowhead).bg(Color::Reset));
         }
     }
 
@@ -688,13 +819,14 @@ fn render_edge(
             (label_x + 1, label_y)
         };
 
-        // Clear background behind label text, then draw the label
+        let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
+
+        // Draw the label as text only. Keep the glyphs unchanged so routing tests
+        // and Mermaid label text stay stable.
         for (i, ch) in label.chars().enumerate() {
             let px = lx + i as u16;
             if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {
-                // Clear cell first (reset to space), then set label char
-                buf[(px, ly)].set_char(' ');
-                buf[(px, ly)].set_char(ch).set_style(Style::default().fg(Color::Gray));
+                buf[(px, ly)].set_char(ch).set_style(label_style);
             }
         }
     }
@@ -704,8 +836,8 @@ fn render_edge(
 mod tests {
     use super::*;
     use crate::model::*;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     /// Helper to build a graph with laid-out nodes.
     fn test_graph() -> Graph {
@@ -742,23 +874,25 @@ mod tests {
     }
 
     #[test]
-    fn test_rounded_rect_corners() {
+    fn test_rounded_rect_renders_as_borderless_card() {
         let graph = test_graph();
+        let theme = Theme::default();
         let backend = TestBackend::new(30, 14);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
-        // RoundedRect corners: ╭ at top-left, ╮ at top-right, ╰ at bottom-left, ╯ at bottom-right
-        // Node A at (5, 1) with width 11, height 3
-        assert_eq!(buf[(5, 1)].symbol(), "╭", "top-left corner of node A");
-        assert_eq!(buf[(15, 1)].symbol(), "╮", "top-right corner of node A");
-        assert_eq!(buf[(5, 3)].symbol(), "╰", "bottom-left corner of node A");
-        assert_eq!(buf[(15, 3)].symbol(), "╯", "bottom-right corner of node A");
+        // Rounded nodes are now filled cards with no outline glyphs.
+        assert_eq!(buf[(5, 1)].symbol(), " ");
+        assert_eq!(buf[(5, 1)].bg, theme.rounded_rect.fill);
+        assert_eq!(buf[(15, 3)].symbol(), " ");
+        assert_eq!(buf[(15, 3)].bg, theme.rounded_rect.fill);
     }
 
     #[test]
-    fn test_rectangle_corners() {
+    fn test_rectangle_renders_as_borderless_card() {
         let graph = Graph {
             direction: Direction::TopDown,
             nodes: vec![Node {
@@ -774,14 +908,77 @@ mod tests {
         };
         let backend = TestBackend::new(20, 8);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
-        // Plain rect corners: ┌ ┐ └ ┘
-        assert_eq!(buf[(2, 1)].symbol(), "┌");
-        assert_eq!(buf[(10, 1)].symbol(), "┐");
-        assert_eq!(buf[(2, 3)].symbol(), "└");
-        assert_eq!(buf[(10, 3)].symbol(), "┘");
+        let theme = Theme::default();
+        // Rectangles are filled cards with no outline glyphs.
+        assert_eq!(buf[(2, 1)].symbol(), " ");
+        assert_eq!(buf[(2, 1)].bg, theme.rectangle.fill);
+        assert_eq!(buf[(10, 3)].symbol(), " ");
+        assert_eq!(buf[(10, 3)].bg, theme.rectangle.fill);
+    }
+
+    #[test]
+    fn test_node_fill_stays_inside_node_bounds() {
+        let graph = test_graph();
+        let theme = Theme::default();
+        let backend = TestBackend::new(30, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+
+        // Interior cells inherit the node card fill.
+        assert_eq!(buf[(6, 2)].bg, theme.rounded_rect.fill);
+        // Border cells also carry the fill so there is no black gap between
+        // the border glyph and the card background.
+        assert_eq!(buf[(5, 1)].bg, theme.rounded_rect.fill);
+        assert_eq!(buf[(5, 2)].bg, theme.rounded_rect.fill);
+        // Shadows are thin glyphs, not full background cells.
+        assert_eq!(buf[(16, 1)].bg, Color::Reset);
+        assert_eq!(buf[(16, 2)].symbol(), "▏");
+        assert_eq!(buf[(16, 2)].fg, theme.shadow);
+        assert_eq!(buf[(16, 2)].bg, Color::Reset);
+        assert_eq!(buf[(5, 4)].symbol(), "▔");
+        assert_eq!(buf[(5, 4)].fg, theme.shadow);
+        assert_eq!(buf[(5, 4)].bg, Color::Reset);
+    }
+
+    #[test]
+    fn test_edge_label_is_text_only() {
+        let graph = test_graph();
+        let theme = Theme::default();
+        let backend = TestBackend::new(30, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+
+        // The label text stays unchanged and intentionally has no background pill.
+        let rendered: String = (11..15).map(|x| buf[(x, 5)].symbol().to_string()).collect();
+        assert_eq!(rendered, "next");
+        for x in 11..15 {
+            assert_eq!(buf[(x, 5)].fg, theme.edge_label);
+            assert_eq!(buf[(x, 5)].bg, Color::Reset);
+        }
+    }
+
+    #[test]
+    fn test_inline_output_emits_background_ansi() {
+        let output = render_to_string(&test_graph()).unwrap();
+        assert!(
+            output.contains("\x1b[48;2;"),
+            "inline output should include truecolor background escapes"
+        );
+        assert!(
+            output.contains("\x1b[49m"),
+            "inline output should reset background color"
+        );
     }
 
     #[test]
@@ -789,7 +986,9 @@ mod tests {
         let graph = test_graph();
         let backend = TestBackend::new(30, 14);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Node A label "Start" should appear inside the node (y=2 is the middle row, inner area)
@@ -807,7 +1006,9 @@ mod tests {
         let graph = test_graph();
         let backend = TestBackend::new(30, 14);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Node B at y=8, inner row at y=9
@@ -823,7 +1024,9 @@ mod tests {
         let graph = test_graph();
         let backend = TestBackend::new(30, 14);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Edge goes from node A bottom (y=3) to node B top (y=8)
@@ -843,12 +1046,17 @@ mod tests {
         let graph = test_graph();
         let backend = TestBackend::new(30, 14);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Arrow should be one cell above node B top border: (10, 7)
         let sym = buf[(10, 7)].symbol();
-        assert_eq!(sym, "▼", "Arrowhead should be ▼ just above target node, got: '{sym}'");
+        assert_eq!(
+            sym, "▼",
+            "Arrowhead should be ▼ just above target node, got: '{sym}'"
+        );
     }
 
     #[test]
@@ -856,13 +1064,18 @@ mod tests {
         let graph = test_graph();
         let backend = TestBackend::new(30, 14);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Edge label "next" should appear near the midpoint of the edge
         // midpoint y = (3+8)/2 = 5, x = 10, label starts at x=11
         let rendered: String = (11..15).map(|x| buf[(x, 5)].symbol().to_string()).collect();
-        assert_eq!(rendered, "next", "Edge label should be 'next', got: '{rendered}'");
+        assert_eq!(
+            rendered, "next",
+            "Edge label should be 'next', got: '{rendered}'"
+        );
     }
 
     #[test]
@@ -899,7 +1112,9 @@ mod tests {
         };
         let backend = TestBackend::new(20, 12);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Midpoint of edge: x=5, y=4
@@ -941,7 +1156,9 @@ mod tests {
         };
         let backend = TestBackend::new(20, 12);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Target top at (5, 7) should NOT have an arrowhead
@@ -966,14 +1183,17 @@ mod tests {
         };
         let backend = TestBackend::new(20, 10);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
-        // Diamond renders as a clean semantic boxed node, not fake diagonal borders.
-        assert_eq!(buf[(3, 1)].symbol(), "╔", "Diamond box top-left should be ╔");
-        assert_eq!(buf[(13, 1)].symbol(), "╗", "Diamond box top-right should be ╗");
-        assert_eq!(buf[(3, 5)].symbol(), "╚", "Diamond box bottom-left should be ╚");
-        assert_eq!(buf[(13, 5)].symbol(), "╝", "Diamond box bottom-right should be ╝");
+        // Diamond renders as a clean semantic card; the ◆ icon carries the
+        // decision semantics instead of a geometric outline.
+        assert_eq!(buf[(3, 1)].symbol(), " ");
+        assert_eq!(buf[(3, 1)].bg, Theme::default().diamond.fill);
+        assert_eq!(buf[(13, 5)].symbol(), " ");
+        assert_eq!(buf[(13, 5)].bg, Theme::default().diamond.fill);
         let rendered: String = (3..14).map(|x| buf[(x, 3)].symbol().to_string()).collect();
         assert!(
             rendered.contains("◆ OK?"),
@@ -1015,7 +1235,9 @@ mod tests {
         };
         let backend = TestBackend::new(30, 8);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Horizontal edge at y=2, arrowhead one cell left of node R's left border: (14, 2)
@@ -1024,7 +1246,10 @@ mod tests {
 
         // Check horizontal line somewhere in the middle
         let mid_sym = buf[(10, 2)].symbol();
-        assert_eq!(mid_sym, "─", "Horizontal edge should use ─, got: '{mid_sym}'");
+        assert_eq!(
+            mid_sym, "─",
+            "Horizontal edge should use ─, got: '{mid_sym}'"
+        );
     }
 
     #[test]
@@ -1080,7 +1305,9 @@ mod tests {
 
         let backend = TestBackend::new(40, 18);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         // Both edges leave A through the same vertical segment, then split left/right.
@@ -1106,13 +1333,17 @@ mod tests {
         let backend = TestBackend::new(20, 8);
         let mut terminal = Terminal::new(backend).unwrap();
         // Should not panic
-        terminal.draw(|frame| render_to_frame(&graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
     }
 
     fn dump_graph(name: &str, graph: &Graph, width: u16, height: u16) {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|frame| render_to_frame(graph, frame)).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(graph, frame))
+            .unwrap();
         let buf = terminal.backend().buffer();
 
         println!("\n=== {name} render dump {width}x{height} ===");

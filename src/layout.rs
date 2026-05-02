@@ -15,6 +15,7 @@ const PADDING_V: f64 = 0.0;
 const MIN_WIDTH: f64 = 8.0;
 
 /// Minimum node height.
+/// Three rows gives cards a true middle row for vertically centered text.
 const MIN_HEIGHT: f64 = 3.0;
 
 /// Horizontal gap between sibling nodes in the same layer.
@@ -87,14 +88,14 @@ fn size_nodes(nodes: &mut [Node]) {
         let (w, h) = match node.shape {
             NodeShape::Diamond => {
                 let mut w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
-                let h = 1.0 + PADDING_V * 2.0 + 2.0;
+                let h = 1.0 + PADDING_V * 2.0;
                 w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
                 (w, h)
             }
             NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect => {
                 let mut w = label_len + PADDING_H * 2.0 + 2.0;
                 w = w.ceil(); if w as i64 % 2 != 0 { w += 1.0; }
-                let h = 1.0 + PADDING_V * 2.0 + 2.0;
+                let h = 1.0 + PADDING_V * 2.0;
                 (w, h)
             }
         };
