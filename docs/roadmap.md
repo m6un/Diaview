@@ -39,6 +39,62 @@ The foundation — parse Mermaid, lay out nodes, render beautifully to the termi
 
 ---
 
+## Phase 1.5: Complex Diagram Layout & Routing
+
+**Status: Newly identified gap**
+
+The renderer is visually strong for tree-shaped, pipeline-shaped, and moderately branched DAG diagrams. However, stress-testing with real architecture-style Mermaid exposed that Diaview does **not yet handle dense complex diagrams well**.
+
+### Context from stress testing
+
+A large compatible Mermaid diagram with clients, edge services, API routing, service mesh, databases, observability, and external providers parsed successfully, but rendered poorly. The output became visual spaghetti: long edge walls, overlapping dashed monitoring paths, crowded labels, and excessive crossings.
+
+The issue is not primarily styling. It is layout/routing intelligence. Current Diaview has a basic layered layout plus orthogonal edge routing, but complex architecture diagrams need a more complete graph drawing pipeline.
+
+### Problem patterns
+
+- [ ] **Shared sinks create routing walls** — many nodes pointing to `LOGS`, `METRICS`, `ALERTS`, or `DONE` produce huge fan-in congestion
+- [ ] **Cycles and back-edges break the forward-flow assumption** — edges such as `Payment --> Billing` create reverse routes in LR/TD layouts
+- [ ] **No global edge lane reservation** — edges are routed locally rather than assigned non-overlapping lanes globally
+- [ ] **Dense fan-out/fan-in is untreated** — routers, queues, logs, and metrics naturally create bus-like structures that need special rendering
+- [ ] **Edge labels collide in crowded branches** — labels need placement that accounts for nearby nodes and other labels
+- [ ] **No subgraph/swimlane clustering** — architecture diagrams want sections like Client, Edge, API, Services, Data, Observability, External
+- [ ] **Monitoring/telemetry edges overwhelm primary flow** — dotted side-channel edges should be bundled, dimmed, hidden, or routed separately
+
+### Required layout improvements
+
+- [ ] Implement a fuller Sugiyama-style pipeline:
+  - [ ] cycle detection and cycle/back-edge handling
+  - [ ] stronger layer assignment
+  - [ ] dummy nodes for all long edges
+  - [ ] crossing minimization across multiple sweeps
+  - [ ] coordinate assignment with spacing constraints
+- [ ] Add global orthogonal routing with lane reservation and route costs
+- [ ] Add stronger node avoidance and label avoidance
+- [ ] Add edge bundling for shared sources/sinks, especially logs/metrics/event queues
+- [ ] Add explicit fan-in/fan-out bus rendering
+- [ ] Add port assignment on node sides so edges do not all leave/enter the same cell
+- [ ] Add optional edge priority classes: primary flow vs telemetry vs error paths
+- [ ] Add graph simplification modes for huge diagrams: hide telemetry, collapse leaf groups, or render summaries
+
+### Required Mermaid/model support
+
+- [ ] Parse and preserve `subgraph` blocks
+- [ ] Add group/cluster nodes to the `Graph` IR
+- [ ] Lay out groups as swimlanes or boxed regions
+- [ ] Keep related nodes spatially local inside groups
+- [ ] Support group-level edges where possible
+
+### Success criteria
+
+- [ ] Real architecture diagrams with 30–60 nodes remain readable
+- [ ] Shared observability sinks no longer create edge walls
+- [ ] Back-edges are visually marked and routed without destroying the main flow
+- [ ] Primary request flow remains legible even when telemetry/error edges exist
+- [ ] A Mermaid diagram organized with `subgraph` sections renders as clear terminal swimlanes/clusters
+
+---
+
 ## Phase 2: Interactive Navigation
 
 **Status: Next up**

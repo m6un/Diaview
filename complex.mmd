@@ -1,0 +1,78 @@
+flowchart TD
+    CLIENT((Client))
+    EDGE[Edge Gateway]
+    SAFE{Safe Request?}
+    BLOCKED[Blocked Response]
+    AUTH{Authenticated?}
+    LOGIN[Login Required]
+    LIMIT{Rate Limit OK?}
+    THROTTLED[Throttled Response]
+    ROUTER[Request Router]
+
+    PROFILE[Profile API]
+    PROFILE_CACHE[Read Profile Cache]
+    PROFILE_DB[Load User Record]
+    PROFILE_RESULT[Return Profile]
+
+    SEARCH[Search API]
+    QUERY_PARSE[Parse Query]
+    SEARCH_INDEX[Query Search Index]
+    PRODUCT_LOAD[Load Product Details]
+    SEARCH_RESULT[Return Results]
+
+    CART[Cart API]
+    CART_READ[Read Cart]
+    CART_VALIDATE{Items Valid?}
+    CART_ERROR[Return Cart Error]
+    CART_SAVE[Save Cart]
+    CART_RESULT[Return Cart]
+
+    CHECKOUT[Checkout API]
+    STOCK{Stock Available?}
+    OUT_STOCK[Out Of Stock]
+    FRAUD{Fraud Check OK?}
+    REVIEW[Manual Review]
+    PAYMENT[Charge Payment]
+    ORDER[Create Order]
+    RECEIPT[Send Receipt]
+    SUCCESS((Success))
+
+    CLIENT --> EDGE
+    EDGE --> SAFE
+
+    SAFE -->|no| BLOCKED
+    SAFE -->|yes| AUTH
+
+    AUTH -->|no| LOGIN
+    AUTH -->|yes| LIMIT
+
+    LIMIT -->|no| THROTTLED
+    LIMIT -->|yes| ROUTER
+
+    ROUTER -->|profile| PROFILE
+    PROFILE --> PROFILE_CACHE
+    PROFILE_CACHE --> PROFILE_DB
+    PROFILE_DB --> PROFILE_RESULT
+
+    ROUTER -->|search| SEARCH
+    SEARCH --> QUERY_PARSE
+    QUERY_PARSE --> SEARCH_INDEX
+    SEARCH_INDEX --> PRODUCT_LOAD
+    PRODUCT_LOAD --> SEARCH_RESULT
+
+    ROUTER -->|cart| CART
+    CART --> CART_READ
+    CART_READ --> CART_VALIDATE
+    CART_VALIDATE -->|no| CART_ERROR
+    CART_VALIDATE -->|yes| CART_SAVE
+    CART_SAVE --> CART_RESULT
+
+    ROUTER -->|checkout| CHECKOUT
+    CHECKOUT --> STOCK
+    STOCK -->|no| OUT_STOCK
+    STOCK -->|yes| FRAUD
+    FRAUD -->|no| REVIEW
+    FRAUD -->|yes| PAYMENT
+    PAYMENT --> ORDER
+    ORDER --> RECEIPT
+    RECEIPT --> SUCCESS
