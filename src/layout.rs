@@ -629,6 +629,8 @@ fn assign_route_plans(graph: &mut Graph) {
 
     let source_offsets = port_offsets(&source_keys);
     let target_offsets = port_offsets(&target_keys);
+    let bundles = detect_bundles(graph, &node_by_id);
+    let mut lane_allocator = LaneAllocator::default();
 
     for (idx, edge) in graph.edges.iter_mut().enumerate() {
         let (Some(src), Some(tgt)) = (node_by_id.get(&edge.source), node_by_id.get(&edge.target))
@@ -641,8 +643,22 @@ fn assign_route_plans(graph: &mut Graph) {
         let target_side = target_keys[idx].1.clone();
         let source_port = make_port(src, source_side, source_offsets[idx]);
         let target_port = make_port(tgt, target_side, target_offsets[idx]);
-        let lane_id = Some(idx);
-        let points = orthogonal_points(&graph.direction, &source_port, &target_port, idx);
+        let bundle = bundle_for_edge(edge, &bundles);
+        let (lane_id, points) = if let Some(bundle) = bundle {
+            let lane_id = lane_allocator.bundle_lane(bundle.key.clone());
+            let trunk_coord =
+                bundle_trunk_coordinate(&graph.direction, bundle.kind, &source_port, &target_port);
+            (
+                Some(lane_id),
+                orthogonal_points(&graph.direction, &source_port, &target_port, trunk_coord),
+            )
+        } else {
+            let lane = lane_allocator.reserve_between(&graph.direction, &source_port, &target_port);
+            (
+                Some(lane.id),
+                orthogonal_points(&graph.direction, &source_port, &target_port, lane.coord),
+            )
+        };
         let label_anchor = route_midpoint(&points);
 
         edge.route = Some(RoutePlan {
@@ -653,6 +669,208 @@ fn assign_route_plans(graph: &mut Graph) {
             class: classes[idx].clone(),
             label_anchor,
         });
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum BundleKind {
+    SharedSink,
+    SharedSource,
+}
+
+#[derive(Debug, Clone)]
+struct BundleAssignment {
+    key: (String, BundleKind),
+    kind: BundleKind,
+}
+
+#[derive(Debug, Default)]
+struct LaneAllocator {
+    next_id: usize,
+    band_counts: HashMap<BandKey, usize>,
+    bundle_ids: HashMap<(String, BundleKind), usize>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ReservedLane {
+    id: usize,
+    coord: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BandKey {
+    direction: Direction,
+    start: i64,
+    end: i64,
+}
+
+impl LaneAllocator {
+    fn reserve_between(
+        &mut self,
+        direction: &Direction,
+        source_port: &Port,
+        target_port: &Port,
+    ) -> ReservedLane {
+        let (start, end, mid) = match direction {
+            Direction::TopDown => (
+                source_port.y.min(target_port.y).round() as i64,
+                source_port.y.max(target_port.y).round() as i64,
+                (source_port.y + target_port.y) / 2.0,
+            ),
+            Direction::LeftRight => (
+                source_port.x.min(target_port.x).round() as i64,
+                source_port.x.max(target_port.x).round() as i64,
+                (source_port.x + target_port.x) / 2.0,
+            ),
+        };
+        let key = BandKey {
+            direction: direction.clone(),
+            start,
+            end,
+        };
+        let rank = self.band_counts.entry(key).or_insert(0);
+        let coord = mid + lane_offset(*rank);
+        *rank += 1;
+        let id = self.alloc_id();
+        ReservedLane { id, coord }
+    }
+
+    fn bundle_lane(&mut self, key: (String, BundleKind)) -> usize {
+        if let Some(id) = self.bundle_ids.get(&key) {
+            return *id;
+        }
+        let id = self.alloc_id();
+        self.bundle_ids.insert(key, id);
+        id
+    }
+
+    fn alloc_id(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}
+
+fn lane_offset(rank: usize) -> f64 {
+    if rank == 0 {
+        0.0
+    } else {
+        let step = (rank + 1) / 2;
+        if rank % 2 == 1 {
+            -(step as f64)
+        } else {
+            step as f64
+        }
+    }
+}
+
+fn detect_bundles(
+    graph: &Graph,
+    nodes: &HashMap<String, Node>,
+) -> HashMap<(String, BundleKind), BundleAssignment> {
+    let mut incoming: HashMap<String, usize> = HashMap::new();
+    let mut outgoing: HashMap<String, usize> = HashMap::new();
+    for edge in &graph.edges {
+        *incoming.entry(edge.target.clone()).or_default() += 1;
+        *outgoing.entry(edge.source.clone()).or_default() += 1;
+    }
+
+    let mut bundles = HashMap::new();
+    for node in &graph.nodes {
+        let in_degree = incoming.get(&node.id).copied().unwrap_or(0);
+        let out_degree = outgoing.get(&node.id).copied().unwrap_or(0);
+        let semantic_bus = is_semantic_bus_endpoint(node);
+
+        // High fan-in sinks are the common "success/logs/metrics" wall in architecture
+        // diagrams, so bundle them even when the label is not explicitly observability-ish.
+        if in_degree >= 4 {
+            let key = (node.id.clone(), BundleKind::SharedSink);
+            bundles.insert(
+                key.clone(),
+                BundleAssignment {
+                    key,
+                    kind: BundleKind::SharedSink,
+                },
+            );
+        }
+
+        // Fan-out from ordinary routers is often the main content and should keep separate
+        // lanes. Only collapse source trunks for semantic bus/queue/telemetry endpoints.
+        if out_degree >= 4 && semantic_bus {
+            let key = (node.id.clone(), BundleKind::SharedSource);
+            bundles.insert(
+                key.clone(),
+                BundleAssignment {
+                    key,
+                    kind: BundleKind::SharedSource,
+                },
+            );
+        }
+    }
+
+    // Also recognize semantic endpoints that were introduced as dummy-free parsed nodes but
+    // have no matching node entry for some reason.
+    for (id, degree) in incoming {
+        if degree >= 4 && nodes.get(&id).is_some_and(is_semantic_bus_endpoint) {
+            let key = (id, BundleKind::SharedSink);
+            bundles.insert(
+                key.clone(),
+                BundleAssignment {
+                    key,
+                    kind: BundleKind::SharedSink,
+                },
+            );
+        }
+    }
+
+    bundles
+}
+
+fn bundle_for_edge(
+    edge: &Edge,
+    bundles: &HashMap<(String, BundleKind), BundleAssignment>,
+) -> Option<BundleAssignment> {
+    bundles
+        .get(&(edge.target.clone(), BundleKind::SharedSink))
+        .cloned()
+        .or_else(|| {
+            bundles
+                .get(&(edge.source.clone(), BundleKind::SharedSource))
+                .cloned()
+        })
+}
+
+fn is_semantic_bus_endpoint(node: &Node) -> bool {
+    let text = format!("{} {}", node.id, node.label).to_lowercase();
+    contains_any(
+        &text,
+        &[
+            "log",
+            "logs",
+            "metric",
+            "metrics",
+            "alert",
+            "alerts",
+            "event",
+            "events",
+            "queue",
+            "bus",
+            "telemetry",
+        ],
+    )
+}
+
+fn bundle_trunk_coordinate(
+    direction: &Direction,
+    kind: BundleKind,
+    source_port: &Port,
+    target_port: &Port,
+) -> f64 {
+    match (direction, kind) {
+        (Direction::TopDown, BundleKind::SharedSink) => target_port.y - 2.0,
+        (Direction::TopDown, BundleKind::SharedSource) => source_port.y + 2.0,
+        (Direction::LeftRight, BundleKind::SharedSink) => target_port.x - 2.0,
+        (Direction::LeftRight, BundleKind::SharedSource) => source_port.x + 2.0,
     }
 }
 
@@ -834,9 +1052,8 @@ fn orthogonal_points(
     direction: &Direction,
     source_port: &Port,
     target_port: &Port,
-    lane_id: usize,
+    lane_coord: f64,
 ) -> Vec<RoutePoint> {
-    let lane_nudge = (lane_id % 3) as f64 - 1.0;
     let mut points = vec![RoutePoint {
         x: source_port.x,
         y: source_port.y,
@@ -844,24 +1061,22 @@ fn orthogonal_points(
 
     match direction {
         Direction::TopDown => {
-            let mid_y = (source_port.y + target_port.y) / 2.0 + lane_nudge;
             points.push(RoutePoint {
                 x: source_port.x,
-                y: mid_y,
+                y: lane_coord,
             });
             points.push(RoutePoint {
                 x: target_port.x,
-                y: mid_y,
+                y: lane_coord,
             });
         }
         Direction::LeftRight => {
-            let mid_x = (source_port.x + target_port.x) / 2.0 + lane_nudge;
             points.push(RoutePoint {
-                x: mid_x,
+                x: lane_coord,
                 y: source_port.y,
             });
             points.push(RoutePoint {
-                x: mid_x,
+                x: lane_coord,
                 y: target_port.y,
             });
         }
@@ -1256,5 +1471,68 @@ mod tests {
 
         assert_eq!(ports.len(), 2);
         assert_ne!(ports[0], ports[1], "fan-in target ports should differ");
+    }
+
+    #[test]
+    fn phase15_shared_sink_incoming_edges_share_trunk_coordinate() {
+        let mut graph = crate::parser::mermaid::parse(fixtures::phase15_fan_in_sink_mermaid())
+            .expect("phase 1.5 fan-in fixture should parse");
+        layout(&mut graph);
+
+        let incoming: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.target == "SUCCESS")
+            .map(|edge| {
+                edge.route
+                    .as_ref()
+                    .expect("incoming sink edge should be routed")
+            })
+            .collect();
+        assert!(
+            incoming.len() >= 4,
+            "fixture should exercise shared sink bundling"
+        );
+
+        let trunk_y = incoming[0].points[1].y;
+        let lane_id = incoming[0].lane_id;
+        for route in incoming {
+            assert_eq!(
+                route.lane_id, lane_id,
+                "bundled sink edges should share a lane id"
+            );
+            assert!(
+                (route.points[1].y - trunk_y).abs() < 0.01,
+                "bundled sink edges should share the horizontal trunk y coordinate"
+            );
+            assert!(
+                (route.points[2].y - trunk_y).abs() < 0.01,
+                "bundled sink edges should stay on the shared horizontal trunk"
+            );
+        }
+    }
+
+    #[test]
+    fn phase15_non_bundled_fan_out_edges_get_multiple_lane_ids() {
+        let mut graph = crate::parser::mermaid::parse(fixtures::phase15_fan_out_router_mermaid())
+            .expect("phase 1.5 fan-out fixture should parse");
+        layout(&mut graph);
+
+        let lane_ids: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| edge.source == "ROUTER")
+            .map(|edge| edge.route.as_ref().and_then(|route| route.lane_id).unwrap())
+            .collect();
+        let unique_lane_ids: HashSet<_> = lane_ids.iter().copied().collect();
+
+        assert!(
+            lane_ids.len() >= 4,
+            "fixture should exercise fan-out routing"
+        );
+        assert!(
+            unique_lane_ids.len() > 1,
+            "ordinary fan-out routes should reserve multiple lanes instead of one wall"
+        );
     }
 }
