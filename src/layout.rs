@@ -110,7 +110,10 @@ fn layout_graph(graph: &mut Graph) {
     // Step 4: assign positions
     assign_positions(graph, &ordered_layers, &id_to_idx);
 
-    // Step 5: compute layout-owned edge route metadata.
+    // Step 5: compute group bounds from positioned member nodes.
+    assign_group_bounds(graph);
+
+    // Step 6: compute layout-owned edge route metadata.
     assign_route_plans(graph);
 }
 
@@ -593,7 +596,57 @@ fn align_long_edge_targets(graph: &mut Graph, layers: &[Vec<usize>], is_lr: bool
     }
 }
 
-// ── Step 5: route metadata ─────────────────────────────────────────────────
+// ── Step 5: group bounds ───────────────────────────────────────────────────
+
+fn assign_group_bounds(graph: &mut Graph) {
+    if graph.groups.is_empty() {
+        return;
+    }
+
+    let node_by_id: HashMap<String, &Node> = graph
+        .nodes
+        .iter()
+        .filter(|node| !node.id.starts_with("__dummy"))
+        .map(|node| (node.id.clone(), node))
+        .collect();
+
+    const GROUP_PADDING_X: f64 = 2.0;
+    const GROUP_PADDING_Y: f64 = 1.0;
+
+    for group in &mut graph.groups {
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+
+        for node_id in &group.node_ids {
+            let Some(node) = node_by_id.get(node_id) else {
+                continue;
+            };
+            let (Some(x), Some(y), Some(width), Some(height)) =
+                (node.x, node.y, node.width, node.height)
+            else {
+                continue;
+            };
+
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
+        }
+
+        if min_x.is_finite() && min_y.is_finite() && max_x.is_finite() && max_y.is_finite() {
+            let x = (min_x - GROUP_PADDING_X).max(0.0);
+            let y = (min_y - GROUP_PADDING_Y).max(0.0);
+            group.x = Some(x);
+            group.y = Some(y);
+            group.width = Some(max_x - x + GROUP_PADDING_X);
+            group.height = Some(max_y - y + GROUP_PADDING_Y);
+        }
+    }
+}
+
+// ── Step 6: route metadata ─────────────────────────────────────────────────
 
 fn assign_route_plans(graph: &mut Graph) {
     let node_by_id: HashMap<String, Node> = graph
@@ -1306,6 +1359,36 @@ mod tests {
     }
 
     #[test]
+    fn test_subgraph_group_bounds_cover_members() {
+        let mut g = crate::parser::mermaid::parse(
+            r#"
+            graph TD
+            subgraph API[API Layer]
+                A[Gateway] --> B[Service]
+            end
+            C[Outside]
+            "#,
+        )
+        .unwrap();
+        layout(&mut g);
+
+        let group = &g.groups[0];
+        let (gx, gy, gw, gh) = (
+            group.x.unwrap(),
+            group.y.unwrap(),
+            group.width.unwrap(),
+            group.height.unwrap(),
+        );
+        for node_id in ["A", "B"] {
+            let node = find_node(&g, node_id);
+            assert!(node.x.unwrap() >= gx);
+            assert!(node.y.unwrap() >= gy);
+            assert!(node.x.unwrap() + node.width.unwrap() <= gx + gw);
+            assert!(node.y.unwrap() + node.height.unwrap() <= gy + gh);
+        }
+    }
+
+    #[test]
     fn test_diamond_children_side_by_side() {
         let mut g = fixtures::diamond_decision();
         layout(&mut g);
@@ -1361,6 +1444,7 @@ mod tests {
                 height: None,
             }],
             edges: vec![],
+            groups: vec![],
         };
         layout(&mut g);
         assert_all_positioned(&g);
@@ -1394,6 +1478,7 @@ mod tests {
                 },
             ],
             edges: vec![],
+            groups: vec![],
         };
         layout(&mut g);
         assert_all_positioned(&g);
@@ -1437,6 +1522,7 @@ mod tests {
                 height: None,
             }],
             edges: vec![],
+            groups: vec![],
         };
         layout(&mut g);
         let t = find_node(&g, "T");
@@ -1477,6 +1563,7 @@ mod tests {
             direction: Direction::TopDown,
             nodes: vec![],
             edges: vec![],
+            groups: vec![],
         };
         layout(&mut g); // should not panic
     }
@@ -1564,6 +1651,7 @@ mod tests {
                     route: None,
                 },
             ],
+            groups: vec![],
         };
         layout(&mut g);
 
@@ -1740,6 +1828,7 @@ mod tests {
                     route: None,
                 },
             ],
+            groups: vec![],
         };
         layout(&mut graph);
 
