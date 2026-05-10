@@ -630,6 +630,7 @@ fn assign_route_plans(graph: &mut Graph) {
     let source_offsets = port_offsets(&source_keys);
     let target_offsets = port_offsets(&target_keys);
     let bundles = detect_bundles(graph, &node_by_id);
+    let perimeter = graph_perimeter(&graph.nodes);
     let mut lane_allocator = LaneAllocator::default();
 
     for (idx, edge) in graph.edges.iter_mut().enumerate() {
@@ -643,6 +644,7 @@ fn assign_route_plans(graph: &mut Graph) {
         let target_side = target_keys[idx].1.clone();
         let source_port = make_port(src, source_side, source_offsets[idx]);
         let target_port = make_port(tgt, target_side, target_offsets[idx]);
+        let class = &classes[idx];
         let bundle = bundle_for_edge(edge, &bundles);
         let (lane_id, points) = if let Some(bundle) = bundle {
             let lane_id = lane_allocator.bundle_lane(bundle.key.clone());
@@ -651,6 +653,17 @@ fn assign_route_plans(graph: &mut Graph) {
             (
                 Some(lane_id),
                 orthogonal_points(&graph.direction, &source_port, &target_port, trunk_coord),
+            )
+        } else if *class == EdgeClass::Telemetry {
+            let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
+            (
+                Some(lane.id),
+                telemetry_perimeter_points(
+                    &graph.direction,
+                    &source_port,
+                    &target_port,
+                    lane.coord,
+                ),
             )
         } else {
             let lane = lane_allocator.reserve_between(&graph.direction, &source_port, &target_port);
@@ -688,6 +701,7 @@ struct BundleAssignment {
 struct LaneAllocator {
     next_id: usize,
     band_counts: HashMap<BandKey, usize>,
+    perimeter_counts: HashMap<Direction, usize>,
     bundle_ids: HashMap<(String, BundleKind), usize>,
 }
 
@@ -695,6 +709,26 @@ struct LaneAllocator {
 struct ReservedLane {
     id: usize,
     coord: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GraphPerimeter {
+    max_x: f64,
+    max_y: f64,
+}
+
+fn graph_perimeter(nodes: &[Node]) -> GraphPerimeter {
+    let mut perimeter = GraphPerimeter::default();
+    for node in nodes {
+        if node.id.starts_with("__dummy") {
+            continue;
+        }
+        if let (Some(x), Some(y), Some(w), Some(h)) = (node.x, node.y, node.width, node.height) {
+            perimeter.max_x = perimeter.max_x.max(x + w);
+            perimeter.max_y = perimeter.max_y.max(y + h);
+        }
+    }
+    perimeter
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -730,6 +764,21 @@ impl LaneAllocator {
         };
         let rank = self.band_counts.entry(key).or_insert(0);
         let coord = mid + lane_offset(*rank);
+        *rank += 1;
+        let id = self.alloc_id();
+        ReservedLane { id, coord }
+    }
+
+    fn reserve_perimeter(
+        &mut self,
+        direction: &Direction,
+        perimeter: &GraphPerimeter,
+    ) -> ReservedLane {
+        let rank = self.perimeter_counts.entry(direction.clone()).or_insert(0);
+        let coord = match direction {
+            Direction::TopDown => perimeter.max_x + 3.0 + *rank as f64,
+            Direction::LeftRight => perimeter.max_y + 2.0 + *rank as f64,
+        };
         *rank += 1;
         let id = self.alloc_id();
         ReservedLane { id, coord }
@@ -881,24 +930,37 @@ fn classify_edge(
     direction: &Direction,
 ) -> EdgeClass {
     let text = edge_text(edge, nodes);
+
+    if is_back_edge(edge, nodes, id_to_idx, direction) {
+        return EdgeClass::BackEdge;
+    }
+    if contains_any(&text, &["error", "fail", "failure", "deny", "denied"]) {
+        return EdgeClass::Error;
+    }
     if edge.style == EdgeStyle::Dashed
         || edge.style == EdgeStyle::Dotted
         || contains_any(
             &text,
-            &["log", "metric", "trace", "alert", "monitor", "telemetry"],
+            &[
+                "log",
+                "metric",
+                "trace",
+                "alert",
+                "monitor",
+                "telemetry",
+                "observability",
+            ],
         )
     {
         return EdgeClass::Telemetry;
     }
-    if is_back_edge(edge, nodes, id_to_idx, direction) {
-        return EdgeClass::BackEdge;
-    }
-    if edge
-        .label
-        .as_ref()
-        .is_some_and(|label| contains_any(&label.to_lowercase(), &["error", "fail", "deny"]))
-    {
-        return EdgeClass::Error;
+    if contains_any(
+        &text,
+        &[
+            "external", "provider", "stripe", "sendgrid", "github", "slack",
+        ],
+    ) {
+        return EdgeClass::External;
     }
     EdgeClass::Primary
 }
@@ -1078,6 +1140,48 @@ fn orthogonal_points(
             points.push(RoutePoint {
                 x: lane_coord,
                 y: target_port.y,
+            });
+        }
+    }
+
+    points.push(RoutePoint {
+        x: target_port.x,
+        y: target_port.y,
+    });
+    points.dedup_by(|a, b| (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01);
+    points
+}
+
+fn telemetry_perimeter_points(
+    direction: &Direction,
+    source_port: &Port,
+    target_port: &Port,
+    perimeter_coord: f64,
+) -> Vec<RoutePoint> {
+    let mut points = vec![RoutePoint {
+        x: source_port.x,
+        y: source_port.y,
+    }];
+
+    match direction {
+        Direction::TopDown => {
+            points.push(RoutePoint {
+                x: perimeter_coord,
+                y: source_port.y,
+            });
+            points.push(RoutePoint {
+                x: perimeter_coord,
+                y: target_port.y,
+            });
+        }
+        Direction::LeftRight => {
+            points.push(RoutePoint {
+                x: source_port.x,
+                y: perimeter_coord,
+            });
+            points.push(RoutePoint {
+                x: target_port.x,
+                y: perimeter_coord,
             });
         }
     }
@@ -1533,6 +1637,126 @@ mod tests {
         assert!(
             unique_lane_ids.len() > 1,
             "ordinary fan-out routes should reserve multiple lanes instead of one wall"
+        );
+    }
+
+    #[test]
+    fn phase15_telemetry_overlay_edges_are_classified_telemetry() {
+        let mut graph =
+            crate::parser::mermaid::parse(fixtures::phase15_telemetry_overlay_mermaid())
+                .expect("phase 1.5 telemetry fixture should parse");
+        layout(&mut graph);
+
+        let telemetry_edges: Vec<_> = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.route
+                    .as_ref()
+                    .is_some_and(|route| route.class == EdgeClass::Telemetry)
+            })
+            .collect();
+        assert!(
+            telemetry_edges.len() >= 4,
+            "fixture should include classified telemetry overlay edges"
+        );
+        let metrics_to_alerts = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == "METRICS" && edge.target == "ALERTS")
+            .expect("fixture should include metrics-to-alerts telemetry");
+        assert_eq!(
+            metrics_to_alerts.route.as_ref().map(|route| &route.class),
+            Some(&EdgeClass::Telemetry)
+        );
+    }
+
+    #[test]
+    fn phase15_lr_telemetry_uses_lower_perimeter_route_when_not_bundled() {
+        let mut graph =
+            crate::parser::mermaid::parse(fixtures::phase15_telemetry_overlay_mermaid())
+                .expect("phase 1.5 telemetry fixture should parse");
+        layout(&mut graph);
+
+        let max_node_bottom = graph
+            .nodes
+            .iter()
+            .filter(|node| !node.id.starts_with("__dummy"))
+            .map(|node| node.y.unwrap() + node.height.unwrap())
+            .fold(0.0_f64, f64::max);
+        let edge = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == "METRICS" && edge.target == "ALERTS")
+            .expect("fixture should include non-bundled metrics-to-alerts telemetry");
+        let route = edge.route.as_ref().expect("edge should have a route");
+
+        assert_eq!(route.class, EdgeClass::Telemetry);
+        assert!(
+            route.points.iter().any(|point| point.y > max_node_bottom),
+            "telemetry route should touch lower perimeter below node bounds"
+        );
+    }
+
+    #[test]
+    fn error_and_back_edge_classification_precedes_telemetry() {
+        let mut graph = Graph {
+            direction: Direction::LeftRight,
+            nodes: vec![
+                Node {
+                    id: "API".into(),
+                    label: "API".into(),
+                    shape: NodeShape::Rectangle,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                },
+                Node {
+                    id: "LOGS".into(),
+                    label: "Logs".into(),
+                    shape: NodeShape::Rectangle,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: vec![
+                Edge {
+                    source: "API".into(),
+                    target: "LOGS".into(),
+                    label: Some("error telemetry".into()),
+                    style: EdgeStyle::Dotted,
+                    arrowhead: Arrowhead::Normal,
+                    route: None,
+                },
+                Edge {
+                    source: "LOGS".into(),
+                    target: "API".into(),
+                    label: Some("metric retry".into()),
+                    style: EdgeStyle::Dotted,
+                    arrowhead: Arrowhead::Normal,
+                    route: None,
+                },
+            ],
+        };
+        layout(&mut graph);
+
+        let api_to_logs = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == "API")
+            .unwrap();
+        let logs_to_api = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == "LOGS")
+            .unwrap();
+        assert_eq!(api_to_logs.route.as_ref().unwrap().class, EdgeClass::Error);
+        assert_eq!(
+            logs_to_api.route.as_ref().unwrap().class,
+            EdgeClass::BackEdge
         );
     }
 }
