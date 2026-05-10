@@ -34,6 +34,7 @@ pub mod fixtures {
                 arrowhead: Arrowhead::Normal,
                 route: None,
             }],
+            groups: vec![],
         }
     }
 
@@ -105,6 +106,7 @@ pub mod fixtures {
                     route: None,
                 },
             ],
+            groups: vec![],
         }
     }
 
@@ -277,6 +279,7 @@ flowchart TD
                     route: None,
                 },
             ],
+            groups: vec![],
         }
     }
 }

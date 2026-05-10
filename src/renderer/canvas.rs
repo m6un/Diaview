@@ -14,7 +14,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::model::{Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Node, NodeShape};
+use crate::model::{Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape};
 use crate::theme::{NodeTheme, Theme};
 
 /// Full terminal render — sets up crossterm, renders, waits for keypress, cleans up.
@@ -171,6 +171,14 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
         }
     }
 
+    for group in &graph.groups {
+        if let (Some(x), Some(y), Some(w), Some(h)) = (group.x, group.y, group.width, group.height)
+        {
+            max_x = max_x.max(x + w + 2.0);
+            max_y = max_y.max(y + h + 2.0);
+        }
+    }
+
     (max_x.ceil() as u16, max_y.ceil() as u16)
 }
 
@@ -187,6 +195,11 @@ pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Them
         return;
     }
 
+    // Render group boxes behind nodes and edges.
+    for group in &graph.groups {
+        render_group(group, frame, area, theme);
+    }
+
     // Tight, one-cell card shadows first.
     for node in &graph.nodes {
         render_node_shadow(node, frame, area, theme);
@@ -199,6 +212,56 @@ pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Them
 
     // Render edges on top so arrowheads remain visible at node boundaries.
     render_edges(graph, frame, area, theme);
+}
+
+fn render_group(group: &Group, frame: &mut Frame, area: Rect, theme: &Theme) {
+    let rect = match group_rect(group) {
+        Some(rect) if rect_inside(rect, area) && rect.width >= 2 && rect.height >= 2 => rect,
+        _ => return,
+    };
+
+    let style = Style::default().fg(theme.muted).bg(Color::Reset);
+    let buf = frame.buffer_mut();
+    let left = rect.x;
+    let right = rect.x.saturating_add(rect.width.saturating_sub(1));
+    let top = rect.y;
+    let bottom = rect.y.saturating_add(rect.height.saturating_sub(1));
+
+    buf[(left, top)].set_char('┌').set_style(style);
+    buf[(right, top)].set_char('┐').set_style(style);
+    buf[(left, bottom)].set_char('└').set_style(style);
+    buf[(right, bottom)].set_char('┘').set_style(style);
+
+    for x in left.saturating_add(1)..right {
+        buf[(x, top)].set_char('─').set_style(style);
+        buf[(x, bottom)].set_char('─').set_style(style);
+    }
+    for y in top.saturating_add(1)..bottom {
+        buf[(left, y)].set_char('│').set_style(style);
+        buf[(right, y)].set_char('│').set_style(style);
+    }
+
+    let label = format!(" {} ", group.label);
+    let max_label_width = rect.width.saturating_sub(4) as usize;
+    for (i, ch) in label.chars().take(max_label_width).enumerate() {
+        let x = left.saturating_add(2 + i as u16);
+        if x < right {
+            buf[(x, top)].set_char(ch).set_style(style);
+        }
+    }
+}
+
+fn group_rect(group: &Group) -> Option<Rect> {
+    let (x, y, w, h) = match (group.x, group.y, group.width, group.height) {
+        (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
+        _ => return None,
+    };
+    Some(Rect::new(
+        x as u16,
+        y as u16,
+        w.ceil() as u16,
+        h.ceil() as u16,
+    ))
 }
 
 /// Render a very subtle one-cell cast shadow behind a card.
@@ -962,7 +1025,27 @@ mod tests {
                 arrowhead: Arrowhead::Normal,
                 route: None,
             }],
+            groups: vec![],
         }
+    }
+
+    #[test]
+    fn test_group_bounds_render_behind_nodes() {
+        let mut graph = crate::parser::mermaid::parse(
+            r#"
+            graph TD
+            subgraph API[API Layer]
+                A[Gateway] --> B[Service]
+            end
+            "#,
+        )
+        .unwrap();
+        crate::layout::layout(&mut graph);
+
+        let output = render_to_string(&graph).unwrap();
+        assert!(output.contains("API Layer"));
+        assert!(output.contains('┌'));
+        assert!(output.contains('┘'));
     }
 
     #[test]
@@ -997,6 +1080,7 @@ mod tests {
                 height: Some(3.0),
             }],
             edges: vec![],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1202,6 +1286,7 @@ mod tests {
                 arrowhead: Arrowhead::Normal,
                 route: None,
             }],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1247,6 +1332,7 @@ mod tests {
                 arrowhead: Arrowhead::None,
                 route: None,
             }],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1274,6 +1360,7 @@ mod tests {
                 height: Some(5.0),
             }],
             edges: vec![],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1327,6 +1414,7 @@ mod tests {
                 arrowhead: Arrowhead::Normal,
                 route: None,
             }],
+            groups: vec![],
         };
         let backend = TestBackend::new(30, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1398,6 +1486,7 @@ mod tests {
                     route: None,
                 },
             ],
+            groups: vec![],
         };
 
         let backend = TestBackend::new(40, 18);
@@ -1426,6 +1515,7 @@ mod tests {
                 height: None,
             }],
             edges: vec![],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 8);
         let mut terminal = Terminal::new(backend).unwrap();

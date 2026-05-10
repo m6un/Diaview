@@ -88,8 +88,21 @@ pub struct Edge {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct Group {
+    pub id: String,
+    pub label: String,
+    pub node_ids: Vec<String>,
+    pub parent: Option<String>,
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Graph {
     pub direction: Direction,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
+    pub groups: Vec<Group>,
 }
