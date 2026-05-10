@@ -14,7 +14,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::model::{Arrowhead, Direction, EdgeStyle, Graph, Node, NodeShape};
+use crate::model::{Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Node, NodeShape};
 use crate::theme::{NodeTheme, Theme};
 
 /// Full terminal render — sets up crossterm, renders, waits for keypress, cleans up.
@@ -442,6 +442,17 @@ fn edge_v_char(style: &EdgeStyle) -> char {
     }
 }
 
+fn edge_class_style(class: Option<&EdgeClass>, theme: &Theme) -> Style {
+    let fg = match class {
+        Some(EdgeClass::Telemetry) => theme.muted,
+        Some(EdgeClass::Error) => Color::Rgb(243, 139, 168),
+        Some(EdgeClass::BackEdge) => Color::Rgb(203, 166, 247),
+        Some(EdgeClass::External) => Color::Rgb(116, 199, 236),
+        Some(EdgeClass::Primary) | None => theme.edge,
+    };
+    Style::default().fg(fg).bg(Color::Reset)
+}
+
 /// Arrowhead character based on direction.
 fn arrowhead_char(dx: i32, dy: i32, arrowhead: &Arrowhead) -> Option<char> {
     match arrowhead {
@@ -588,7 +599,7 @@ fn render_edge(
     let buf = frame.buffer_mut();
     let buf_area = buf.area;
 
-    let edge_style = Style::default().fg(theme.edge).bg(Color::Reset);
+    let edge_style = edge_class_style(edge.route.as_ref().map(|route| &route.class), theme);
 
     // Helper: set a cell only if it's in bounds and NOT inside any node's bounding box.
     // Solid edge glyphs merge with existing solid edge glyphs so shared branches form
@@ -666,9 +677,7 @@ fn render_edge(
             }
             if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
                 if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
-                    buf[(end.0, end.1)]
-                        .set_char(arrow)
-                        .set_style(Style::default().fg(theme.arrowhead).bg(Color::Reset));
+                    buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
                 }
             }
         }
@@ -880,9 +889,7 @@ fn render_edge(
     // Arrowhead at the end point — always draw (even near nodes) so it's visible
     if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
         if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
-            buf[(end.0, end.1)]
-                .set_char(arrow)
-                .set_style(Style::default().fg(theme.arrowhead).bg(Color::Reset));
+            buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
         }
     }
 
@@ -1426,6 +1433,34 @@ mod tests {
         terminal
             .draw(|frame| render_to_frame(&graph, frame))
             .unwrap();
+    }
+
+    #[test]
+    fn telemetry_edges_render_with_muted_foreground() {
+        let mut graph = crate::parser::mermaid::parse(
+            crate::testdata::fixtures::phase15_telemetry_overlay_mermaid(),
+        )
+        .unwrap();
+        crate::layout::layout(&mut graph);
+        let theme = Theme::default();
+        let (width, height) = graph_bounds(&graph);
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame_with_theme(&graph, frame, &theme))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let telemetry_glyphs = ["┄", "┆", "▶", "▼", "▲", "◀"];
+
+        let has_muted_telemetry_glyph = (0..buf.area.height).any(|y| {
+            (0..buf.area.width).any(|x| {
+                telemetry_glyphs.contains(&buf[(x, y)].symbol()) && buf[(x, y)].fg == theme.muted
+            })
+        });
+        assert!(
+            has_muted_telemetry_glyph,
+            "at least one telemetry glyph should render with muted foreground"
+        );
     }
 
     fn dump_graph(name: &str, graph: &Graph, width: u16, height: u16) {
