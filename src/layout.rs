@@ -1,4 +1,7 @@
-use crate::model::{Direction, Graph, Node, NodeShape};
+use crate::model::{
+    Direction, Edge, EdgeClass, EdgeStyle, Graph, Node, NodeShape, Port, PortSide, RoutePlan,
+    RoutePoint,
+};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 // ── Layout constants ────────────────────────────────────────────────────────
@@ -106,6 +109,9 @@ fn layout_graph(graph: &mut Graph) {
 
     // Step 4: assign positions
     assign_positions(graph, &ordered_layers, &id_to_idx);
+
+    // Step 5: compute layout-owned edge route metadata.
+    assign_route_plans(graph);
 }
 
 // ── Step 1: sizing ──────────────────────────────────────────────────────────
@@ -306,6 +312,7 @@ fn insert_dummies(
                         style: edge.style.clone(),
                         // Only the final segment gets the arrowhead
                         arrowhead: crate::model::Arrowhead::None,
+                        route: None,
                     });
 
                     current_src = dummy_id;
@@ -318,6 +325,7 @@ fn insert_dummies(
                     label: None,
                     style: edge.style.clone(),
                     arrowhead: edge.arrowhead.clone(),
+                    route: None,
                 });
             }
         }
@@ -583,6 +591,292 @@ fn align_long_edge_targets(graph: &mut Graph, layers: &[Vec<usize>], is_lr: bool
             graph.nodes[target_idx].x = Some((dummy_x - target_w / 2.0).max(0.0));
         }
     }
+}
+
+// ── Step 5: route metadata ─────────────────────────────────────────────────
+
+fn assign_route_plans(graph: &mut Graph) {
+    let node_by_id: HashMap<String, Node> = graph
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node.clone()))
+        .collect();
+    let id_to_idx: HashMap<String, usize> = graph
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(idx, node)| (node.id.clone(), idx))
+        .collect();
+
+    let classes: Vec<EdgeClass> = graph
+        .edges
+        .iter()
+        .map(|edge| classify_edge(edge, &node_by_id, &id_to_idx, &graph.direction))
+        .collect();
+
+    let mut source_keys = Vec::with_capacity(graph.edges.len());
+    let mut target_keys = Vec::with_capacity(graph.edges.len());
+    for (edge, class) in graph.edges.iter().zip(classes.iter()) {
+        source_keys.push((
+            edge.source.clone(),
+            source_side(edge, class, &node_by_id, &graph.direction),
+        ));
+        target_keys.push((
+            edge.target.clone(),
+            target_side(edge, class, &node_by_id, &graph.direction),
+        ));
+    }
+
+    let source_offsets = port_offsets(&source_keys);
+    let target_offsets = port_offsets(&target_keys);
+
+    for (idx, edge) in graph.edges.iter_mut().enumerate() {
+        let (Some(src), Some(tgt)) = (node_by_id.get(&edge.source), node_by_id.get(&edge.target))
+        else {
+            edge.route = None;
+            continue;
+        };
+
+        let source_side = source_keys[idx].1.clone();
+        let target_side = target_keys[idx].1.clone();
+        let source_port = make_port(src, source_side, source_offsets[idx]);
+        let target_port = make_port(tgt, target_side, target_offsets[idx]);
+        let lane_id = Some(idx);
+        let points = orthogonal_points(&graph.direction, &source_port, &target_port, idx);
+        let label_anchor = route_midpoint(&points);
+
+        edge.route = Some(RoutePlan {
+            points,
+            source_port,
+            target_port,
+            lane_id,
+            class: classes[idx].clone(),
+            label_anchor,
+        });
+    }
+}
+
+fn classify_edge(
+    edge: &Edge,
+    nodes: &HashMap<String, Node>,
+    id_to_idx: &HashMap<String, usize>,
+    direction: &Direction,
+) -> EdgeClass {
+    let text = edge_text(edge, nodes);
+    if edge.style == EdgeStyle::Dashed
+        || edge.style == EdgeStyle::Dotted
+        || contains_any(
+            &text,
+            &["log", "metric", "trace", "alert", "monitor", "telemetry"],
+        )
+    {
+        return EdgeClass::Telemetry;
+    }
+    if is_back_edge(edge, nodes, id_to_idx, direction) {
+        return EdgeClass::BackEdge;
+    }
+    if edge
+        .label
+        .as_ref()
+        .is_some_and(|label| contains_any(&label.to_lowercase(), &["error", "fail", "deny"]))
+    {
+        return EdgeClass::Error;
+    }
+    EdgeClass::Primary
+}
+
+fn edge_text(edge: &Edge, nodes: &HashMap<String, Node>) -> String {
+    let mut text = String::new();
+    text.push_str(&edge.source);
+    text.push(' ');
+    text.push_str(&edge.target);
+    if let Some(label) = &edge.label {
+        text.push(' ');
+        text.push_str(label);
+    }
+    if let Some(node) = nodes.get(&edge.source) {
+        text.push(' ');
+        text.push_str(&node.label);
+    }
+    if let Some(node) = nodes.get(&edge.target) {
+        text.push(' ');
+        text.push_str(&node.label);
+    }
+    text.to_lowercase()
+}
+
+fn contains_any(text: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| text.contains(needle))
+}
+
+fn is_back_edge(
+    edge: &Edge,
+    nodes: &HashMap<String, Node>,
+    id_to_idx: &HashMap<String, usize>,
+    direction: &Direction,
+) -> bool {
+    let (Some(src), Some(tgt)) = (nodes.get(&edge.source), nodes.get(&edge.target)) else {
+        return false;
+    };
+    let main_src = match direction {
+        Direction::TopDown => src.y,
+        Direction::LeftRight => src.x,
+    };
+    let main_tgt = match direction {
+        Direction::TopDown => tgt.y,
+        Direction::LeftRight => tgt.x,
+    };
+    if let (Some(src_main), Some(tgt_main)) = (main_src, main_tgt) {
+        return tgt_main < src_main;
+    }
+    match (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
+        (Some(src_idx), Some(tgt_idx)) => tgt_idx < src_idx,
+        _ => false,
+    }
+}
+
+fn source_side(
+    edge: &Edge,
+    class: &EdgeClass,
+    nodes: &HashMap<String, Node>,
+    direction: &Direction,
+) -> PortSide {
+    if *class == EdgeClass::BackEdge {
+        return back_edge_side(edge, nodes, true, direction);
+    }
+    match direction {
+        Direction::TopDown => PortSide::Bottom,
+        Direction::LeftRight => PortSide::Right,
+    }
+}
+
+fn target_side(
+    edge: &Edge,
+    class: &EdgeClass,
+    nodes: &HashMap<String, Node>,
+    direction: &Direction,
+) -> PortSide {
+    if *class == EdgeClass::BackEdge {
+        return back_edge_side(edge, nodes, false, direction);
+    }
+    match direction {
+        Direction::TopDown => PortSide::Top,
+        Direction::LeftRight => PortSide::Left,
+    }
+}
+
+fn back_edge_side(
+    edge: &Edge,
+    nodes: &HashMap<String, Node>,
+    is_source: bool,
+    direction: &Direction,
+) -> PortSide {
+    let (Some(src), Some(tgt)) = (nodes.get(&edge.source), nodes.get(&edge.target)) else {
+        return match direction {
+            Direction::TopDown => PortSide::Left,
+            Direction::LeftRight => PortSide::Top,
+        };
+    };
+    match direction {
+        Direction::TopDown => {
+            let src_x = src.x.unwrap_or(0.0);
+            let tgt_x = tgt.x.unwrap_or(0.0);
+            if (is_source && tgt_x >= src_x) || (!is_source && src_x < tgt_x) {
+                PortSide::Right
+            } else {
+                PortSide::Left
+            }
+        }
+        Direction::LeftRight => {
+            let src_y = src.y.unwrap_or(0.0);
+            let tgt_y = tgt.y.unwrap_or(0.0);
+            if (is_source && tgt_y >= src_y) || (!is_source && src_y < tgt_y) {
+                PortSide::Bottom
+            } else {
+                PortSide::Top
+            }
+        }
+    }
+}
+
+fn port_offsets(keys: &[(String, PortSide)]) -> Vec<f64> {
+    let mut grouped: HashMap<(String, PortSide), Vec<usize>> = HashMap::new();
+    for (idx, key) in keys.iter().enumerate() {
+        grouped.entry(key.clone()).or_default().push(idx);
+    }
+
+    let mut offsets = vec![0.5; keys.len()];
+    for indices in grouped.values_mut() {
+        indices.sort_unstable();
+        let count = indices.len();
+        for (rank, &idx) in indices.iter().enumerate() {
+            offsets[idx] = (rank + 1) as f64 / (count + 1) as f64;
+        }
+    }
+    offsets
+}
+
+fn make_port(node: &Node, side: PortSide, offset: f64) -> Port {
+    let x = node.x.unwrap_or(0.0);
+    let y = node.y.unwrap_or(0.0);
+    let w = node.width.unwrap_or(MIN_WIDTH);
+    let h = node.height.unwrap_or(MIN_HEIGHT);
+    let (px, py) = match side {
+        PortSide::Top => (x + w * offset, y - 1.0),
+        PortSide::Right => (x + w, y + h * offset),
+        PortSide::Bottom => (x + w * offset, y + h),
+        PortSide::Left => (x - 1.0, y + h * offset),
+    };
+    Port { x: px, y: py, side }
+}
+
+fn orthogonal_points(
+    direction: &Direction,
+    source_port: &Port,
+    target_port: &Port,
+    lane_id: usize,
+) -> Vec<RoutePoint> {
+    let lane_nudge = (lane_id % 3) as f64 - 1.0;
+    let mut points = vec![RoutePoint {
+        x: source_port.x,
+        y: source_port.y,
+    }];
+
+    match direction {
+        Direction::TopDown => {
+            let mid_y = (source_port.y + target_port.y) / 2.0 + lane_nudge;
+            points.push(RoutePoint {
+                x: source_port.x,
+                y: mid_y,
+            });
+            points.push(RoutePoint {
+                x: target_port.x,
+                y: mid_y,
+            });
+        }
+        Direction::LeftRight => {
+            let mid_x = (source_port.x + target_port.x) / 2.0 + lane_nudge;
+            points.push(RoutePoint {
+                x: mid_x,
+                y: source_port.y,
+            });
+            points.push(RoutePoint {
+                x: mid_x,
+                y: target_port.y,
+            });
+        }
+    }
+
+    points.push(RoutePoint {
+        x: target_port.x,
+        y: target_port.y,
+    });
+    points.dedup_by(|a, b| (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01);
+    points
+}
+
+fn route_midpoint(points: &[RoutePoint]) -> Option<RoutePoint> {
+    points.get(points.len() / 2).cloned()
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -866,5 +1160,101 @@ mod tests {
             edges: vec![],
         };
         layout(&mut g); // should not panic
+    }
+
+    #[test]
+    fn test_routed_edges_have_points() {
+        let mut g = fixtures::diamond_decision();
+        layout(&mut g);
+
+        for edge in &g.edges {
+            let route = edge.route.as_ref().expect("edge should have a route plan");
+            assert!(
+                route.points.len() >= 2,
+                "edge {} -> {} should have at least two route points",
+                edge.source,
+                edge.target
+            );
+        }
+    }
+
+    #[test]
+    fn test_fan_out_ports_are_distinct() {
+        let mut g = fixtures::diamond_decision();
+        layout(&mut g);
+
+        let ports: Vec<_> = g
+            .edges
+            .iter()
+            .filter(|edge| edge.source == "B")
+            .map(|edge| edge.route.as_ref().unwrap().source_port.clone())
+            .collect();
+
+        assert_eq!(ports.len(), 2);
+        assert_ne!(ports[0], ports[1], "fan-out source ports should differ");
+    }
+
+    #[test]
+    fn test_fan_in_ports_are_distinct() {
+        let mut g = Graph {
+            direction: Direction::TopDown,
+            nodes: vec![
+                Node {
+                    id: "A".into(),
+                    label: "A".into(),
+                    shape: NodeShape::Rectangle,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                },
+                Node {
+                    id: "B".into(),
+                    label: "B".into(),
+                    shape: NodeShape::Rectangle,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                },
+                Node {
+                    id: "C".into(),
+                    label: "Sink".into(),
+                    shape: NodeShape::Rectangle,
+                    x: None,
+                    y: None,
+                    width: None,
+                    height: None,
+                },
+            ],
+            edges: vec![
+                Edge {
+                    source: "A".into(),
+                    target: "C".into(),
+                    label: None,
+                    style: EdgeStyle::Solid,
+                    arrowhead: Arrowhead::Normal,
+                    route: None,
+                },
+                Edge {
+                    source: "B".into(),
+                    target: "C".into(),
+                    label: None,
+                    style: EdgeStyle::Solid,
+                    arrowhead: Arrowhead::Normal,
+                    route: None,
+                },
+            ],
+        };
+        layout(&mut g);
+
+        let ports: Vec<_> = g
+            .edges
+            .iter()
+            .map(|edge| edge.route.as_ref().unwrap().target_port.clone())
+            .collect();
+
+        assert_eq!(ports.len(), 2);
+        assert_ne!(ports[0], ports[1], "fan-in target ports should differ");
     }
 }

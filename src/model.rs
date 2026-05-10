@@ -38,12 +38,53 @@ pub struct Node {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct RoutePoint {
+    pub x: f64,
+    pub y: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PortSide {
+    Top,
+    Right,
+    Bottom,
+    Left,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Port {
+    pub x: f64,
+    pub y: f64,
+    pub side: PortSide,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeClass {
+    Primary,
+    Telemetry,
+    Error,
+    BackEdge,
+    External,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoutePlan {
+    pub points: Vec<RoutePoint>,
+    pub source_port: Port,
+    pub target_port: Port,
+    pub lane_id: Option<usize>,
+    pub class: EdgeClass,
+    pub label_anchor: Option<RoutePoint>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Edge {
     pub source: String,
     pub target: String,
     pub label: Option<String>,
     pub style: EdgeStyle,
     pub arrowhead: Arrowhead,
+    pub route: Option<RoutePlan>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

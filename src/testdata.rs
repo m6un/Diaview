@@ -32,6 +32,7 @@ pub mod fixtures {
                 label: Some("next".into()),
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
         }
     }
@@ -85,6 +86,7 @@ pub mod fixtures {
                     label: None,
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
                 Edge {
                     source: "B".into(),
@@ -92,6 +94,7 @@ pub mod fixtures {
                     label: Some("yes".into()),
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
                 Edge {
                     source: "B".into(),
@@ -99,6 +102,7 @@ pub mod fixtures {
                     label: Some("no".into()),
                     style: EdgeStyle::Dashed,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
             ],
         }
@@ -153,6 +157,7 @@ pub mod fixtures {
                     label: None,
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
                 Edge {
                     source: "B".into(),
@@ -160,6 +165,7 @@ pub mod fixtures {
                     label: Some("result".into()),
                     style: EdgeStyle::Dotted,
                     arrowhead: Arrowhead::Open,
+                    route: None,
                 },
             ],
         }

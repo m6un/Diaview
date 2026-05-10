@@ -200,6 +200,7 @@ fn try_parse_edge(
                 label,
                 style: style.clone(),
                 arrowhead: arrow.clone(),
+                route: None,
             };
             return Ok(Some((
                 src_id, src_shape, src_label, tgt_id, tgt_shape, tgt_label, edge,
@@ -250,6 +251,7 @@ fn try_inline_label_edge(
         label: Some(label_text),
         style,
         arrowhead: arrow,
+        route: None,
     };
 
     Ok(Some((

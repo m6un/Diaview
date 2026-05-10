@@ -162,6 +162,15 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
         }
     }
 
+    for edge in &graph.edges {
+        if let Some(route) = &edge.route {
+            for point in &route.points {
+                max_x = max_x.max(point.x + 2.0);
+                max_y = max_y.max(point.y + 2.0);
+            }
+        }
+    }
+
     (max_x.ceil() as u16, max_y.ceil() as u16)
 }
 
@@ -611,6 +620,81 @@ fn render_edge(
 
     let min_max = |a: u16, b: u16| if a < b { (a, b) } else { (b, a) };
 
+    if let Some(route) = &edge.route {
+        let route_points: Vec<(u16, u16)> = route
+            .points
+            .iter()
+            .map(|point| {
+                (
+                    point.x.max(0.0).round() as u16,
+                    point.y.max(0.0).round() as u16,
+                )
+            })
+            .collect();
+
+        for segment in route_points.windows(2) {
+            let (x0, y0) = segment[0];
+            let (x1, y1) = segment[1];
+            if x0 == x1 {
+                let (a, b) = min_max(y0, y1);
+                for y in a..=b {
+                    set_cell(buf, x0, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                }
+            } else if y0 == y1 {
+                let (a, b) = min_max(x0, x1);
+                for x in a..=b {
+                    set_cell(buf, x, y0, edge_h_char(&edge.style), edge_style, all_nodes);
+                }
+            } else {
+                let (a, b) = min_max(x0, x1);
+                for x in a..=b {
+                    set_cell(buf, x, y0, edge_h_char(&edge.style), edge_style, all_nodes);
+                }
+                let (a, b) = min_max(y0, y1);
+                for y in a..=b {
+                    set_cell(buf, x1, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                }
+            }
+        }
+
+        if let Some((&end, prev)) = route_points.last().zip(route_points.iter().rev().nth(1)) {
+            let mut arrow_dx = end.0 as i32 - prev.0 as i32;
+            let mut arrow_dy = end.1 as i32 - prev.1 as i32;
+            if let Some((dx, dy)) = arrow_vector_into_node(tgt, end) {
+                arrow_dx = dx;
+                arrow_dy = dy;
+            }
+            if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
+                if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
+                    buf[(end.0, end.1)]
+                        .set_char(arrow)
+                        .set_style(Style::default().fg(theme.arrowhead).bg(Color::Reset));
+                }
+            }
+        }
+
+        if let Some(label) = &edge.label {
+            let anchor = route
+                .label_anchor
+                .as_ref()
+                .or_else(|| route.points.get(route.points.len() / 2));
+            if let Some(anchor) = anchor {
+                let lx =
+                    (anchor.x.max(0.0).round() as u16).saturating_sub((label.len() / 2) as u16);
+                let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
+                let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
+                for (i, ch) in label.chars().enumerate() {
+                    let px = lx + i as u16;
+                    if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {
+                        buf[(px, ly)].set_char(ch).set_style(label_style);
+                    }
+                }
+            }
+        }
+
+        return;
+    }
+
     let mut arrow_dx;
     let mut arrow_dy;
     let label_x;
@@ -869,6 +953,7 @@ mod tests {
                 label: Some("next".into()),
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
         }
     }
@@ -1108,6 +1193,7 @@ mod tests {
                 label: None,
                 style: EdgeStyle::Dashed,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
         };
         let backend = TestBackend::new(20, 12);
@@ -1152,6 +1238,7 @@ mod tests {
                 label: None,
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::None,
+                route: None,
             }],
         };
         let backend = TestBackend::new(20, 12);
@@ -1231,6 +1318,7 @@ mod tests {
                 label: None,
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
         };
         let backend = TestBackend::new(30, 8);
@@ -1292,6 +1380,7 @@ mod tests {
                     label: None,
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
                 Edge {
                     source: "A".into(),
@@ -1299,6 +1388,7 @@ mod tests {
                     label: None,
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
             ],
         };
