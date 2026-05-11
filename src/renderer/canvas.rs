@@ -14,7 +14,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::model::{Arrowhead, Direction, EdgeStyle, Graph, Node, NodeShape};
+use crate::model::{Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape};
 use crate::theme::{NodeTheme, Theme};
 
 /// Full terminal render — sets up crossterm, renders, waits for keypress, cleans up.
@@ -162,6 +162,23 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
         }
     }
 
+    for edge in &graph.edges {
+        if let Some(route) = &edge.route {
+            for point in &route.points {
+                max_x = max_x.max(point.x + 2.0);
+                max_y = max_y.max(point.y + 2.0);
+            }
+        }
+    }
+
+    for group in &graph.groups {
+        if let (Some(x), Some(y), Some(w), Some(h)) = (group.x, group.y, group.width, group.height)
+        {
+            max_x = max_x.max(x + w + 2.0);
+            max_y = max_y.max(y + h + 2.0);
+        }
+    }
+
     (max_x.ceil() as u16, max_y.ceil() as u16)
 }
 
@@ -178,6 +195,11 @@ pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Them
         return;
     }
 
+    // Render group boxes behind nodes and edges.
+    for group in &graph.groups {
+        render_group(group, frame, area, theme);
+    }
+
     // Tight, one-cell card shadows first.
     for node in &graph.nodes {
         render_node_shadow(node, frame, area, theme);
@@ -190,6 +212,56 @@ pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Them
 
     // Render edges on top so arrowheads remain visible at node boundaries.
     render_edges(graph, frame, area, theme);
+}
+
+fn render_group(group: &Group, frame: &mut Frame, area: Rect, theme: &Theme) {
+    let rect = match group_rect(group) {
+        Some(rect) if rect_inside(rect, area) && rect.width >= 2 && rect.height >= 2 => rect,
+        _ => return,
+    };
+
+    let style = Style::default().fg(theme.muted).bg(Color::Reset);
+    let buf = frame.buffer_mut();
+    let left = rect.x;
+    let right = rect.x.saturating_add(rect.width.saturating_sub(1));
+    let top = rect.y;
+    let bottom = rect.y.saturating_add(rect.height.saturating_sub(1));
+
+    buf[(left, top)].set_char('┌').set_style(style);
+    buf[(right, top)].set_char('┐').set_style(style);
+    buf[(left, bottom)].set_char('└').set_style(style);
+    buf[(right, bottom)].set_char('┘').set_style(style);
+
+    for x in left.saturating_add(1)..right {
+        buf[(x, top)].set_char('─').set_style(style);
+        buf[(x, bottom)].set_char('─').set_style(style);
+    }
+    for y in top.saturating_add(1)..bottom {
+        buf[(left, y)].set_char('│').set_style(style);
+        buf[(right, y)].set_char('│').set_style(style);
+    }
+
+    let label = format!(" {} ", group.label);
+    let max_label_width = rect.width.saturating_sub(4) as usize;
+    for (i, ch) in label.chars().take(max_label_width).enumerate() {
+        let x = left.saturating_add(2 + i as u16);
+        if x < right {
+            buf[(x, top)].set_char(ch).set_style(style);
+        }
+    }
+}
+
+fn group_rect(group: &Group) -> Option<Rect> {
+    let (x, y, w, h) = match (group.x, group.y, group.width, group.height) {
+        (Some(x), Some(y), Some(w), Some(h)) => (x, y, w, h),
+        _ => return None,
+    };
+    Some(Rect::new(
+        x as u16,
+        y as u16,
+        w.ceil() as u16,
+        h.ceil() as u16,
+    ))
 }
 
 /// Render a very subtle one-cell cast shadow behind a card.
@@ -433,6 +505,17 @@ fn edge_v_char(style: &EdgeStyle) -> char {
     }
 }
 
+fn edge_class_style(class: Option<&EdgeClass>, theme: &Theme) -> Style {
+    let fg = match class {
+        Some(EdgeClass::Telemetry) => theme.muted,
+        Some(EdgeClass::Error) => Color::Rgb(243, 139, 168),
+        Some(EdgeClass::BackEdge) => Color::Rgb(203, 166, 247),
+        Some(EdgeClass::External) => Color::Rgb(116, 199, 236),
+        Some(EdgeClass::Primary) | None => theme.edge,
+    };
+    Style::default().fg(fg).bg(Color::Reset)
+}
+
 /// Arrowhead character based on direction.
 fn arrowhead_char(dx: i32, dy: i32, arrowhead: &Arrowhead) -> Option<char> {
     match arrowhead {
@@ -579,7 +662,7 @@ fn render_edge(
     let buf = frame.buffer_mut();
     let buf_area = buf.area;
 
-    let edge_style = Style::default().fg(theme.edge).bg(Color::Reset);
+    let edge_style = edge_class_style(edge.route.as_ref().map(|route| &route.class), theme);
 
     // Helper: set a cell only if it's in bounds and NOT inside any node's bounding box.
     // Solid edge glyphs merge with existing solid edge glyphs so shared branches form
@@ -610,6 +693,79 @@ fn render_edge(
     };
 
     let min_max = |a: u16, b: u16| if a < b { (a, b) } else { (b, a) };
+
+    if let Some(route) = &edge.route {
+        let route_points: Vec<(u16, u16)> = route
+            .points
+            .iter()
+            .map(|point| {
+                (
+                    point.x.max(0.0).round() as u16,
+                    point.y.max(0.0).round() as u16,
+                )
+            })
+            .collect();
+
+        for segment in route_points.windows(2) {
+            let (x0, y0) = segment[0];
+            let (x1, y1) = segment[1];
+            if x0 == x1 {
+                let (a, b) = min_max(y0, y1);
+                for y in a..=b {
+                    set_cell(buf, x0, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                }
+            } else if y0 == y1 {
+                let (a, b) = min_max(x0, x1);
+                for x in a..=b {
+                    set_cell(buf, x, y0, edge_h_char(&edge.style), edge_style, all_nodes);
+                }
+            } else {
+                let (a, b) = min_max(x0, x1);
+                for x in a..=b {
+                    set_cell(buf, x, y0, edge_h_char(&edge.style), edge_style, all_nodes);
+                }
+                let (a, b) = min_max(y0, y1);
+                for y in a..=b {
+                    set_cell(buf, x1, y, edge_v_char(&edge.style), edge_style, all_nodes);
+                }
+            }
+        }
+
+        if let Some((&end, prev)) = route_points.last().zip(route_points.iter().rev().nth(1)) {
+            let mut arrow_dx = end.0 as i32 - prev.0 as i32;
+            let mut arrow_dy = end.1 as i32 - prev.1 as i32;
+            if let Some((dx, dy)) = arrow_vector_into_node(tgt, end) {
+                arrow_dx = dx;
+                arrow_dy = dy;
+            }
+            if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
+                if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
+                    buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
+                }
+            }
+        }
+
+        if let Some(label) = &edge.label {
+            let anchor = route
+                .label_anchor
+                .as_ref()
+                .or_else(|| route.points.get(route.points.len() / 2));
+            if let Some(anchor) = anchor {
+                let lx =
+                    (anchor.x.max(0.0).round() as u16).saturating_sub((label.len() / 2) as u16);
+                let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
+                let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
+                for (i, ch) in label.chars().enumerate() {
+                    let px = lx + i as u16;
+                    if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {
+                        buf[(px, ly)].set_char(ch).set_style(label_style);
+                    }
+                }
+            }
+        }
+
+        return;
+    }
 
     let mut arrow_dx;
     let mut arrow_dy;
@@ -796,9 +952,7 @@ fn render_edge(
     // Arrowhead at the end point — always draw (even near nodes) so it's visible
     if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
         if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
-            buf[(end.0, end.1)]
-                .set_char(arrow)
-                .set_style(Style::default().fg(theme.arrowhead).bg(Color::Reset));
+            buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
         }
     }
 
@@ -869,8 +1023,29 @@ mod tests {
                 label: Some("next".into()),
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
+            groups: vec![],
         }
+    }
+
+    #[test]
+    fn test_group_bounds_render_behind_nodes() {
+        let mut graph = crate::parser::mermaid::parse(
+            r#"
+            graph TD
+            subgraph API[API Layer]
+                A[Gateway] --> B[Service]
+            end
+            "#,
+        )
+        .unwrap();
+        crate::layout::layout(&mut graph);
+
+        let output = render_to_string(&graph).unwrap();
+        assert!(output.contains("API Layer"));
+        assert!(output.contains('┌'));
+        assert!(output.contains('┘'));
     }
 
     #[test]
@@ -905,6 +1080,7 @@ mod tests {
                 height: Some(3.0),
             }],
             edges: vec![],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1108,7 +1284,9 @@ mod tests {
                 label: None,
                 style: EdgeStyle::Dashed,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1152,7 +1330,9 @@ mod tests {
                 label: None,
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::None,
+                route: None,
             }],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 12);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1180,6 +1360,7 @@ mod tests {
                 height: Some(5.0),
             }],
             edges: vec![],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 10);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1231,7 +1412,9 @@ mod tests {
                 label: None,
                 style: EdgeStyle::Solid,
                 arrowhead: Arrowhead::Normal,
+                route: None,
             }],
+            groups: vec![],
         };
         let backend = TestBackend::new(30, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1292,6 +1475,7 @@ mod tests {
                     label: None,
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
                 Edge {
                     source: "A".into(),
@@ -1299,8 +1483,10 @@ mod tests {
                     label: None,
                     style: EdgeStyle::Solid,
                     arrowhead: Arrowhead::Normal,
+                    route: None,
                 },
             ],
+            groups: vec![],
         };
 
         let backend = TestBackend::new(40, 18);
@@ -1329,6 +1515,7 @@ mod tests {
                 height: None,
             }],
             edges: vec![],
+            groups: vec![],
         };
         let backend = TestBackend::new(20, 8);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1336,6 +1523,34 @@ mod tests {
         terminal
             .draw(|frame| render_to_frame(&graph, frame))
             .unwrap();
+    }
+
+    #[test]
+    fn telemetry_edges_render_with_muted_foreground() {
+        let mut graph = crate::parser::mermaid::parse(
+            crate::testdata::fixtures::phase15_telemetry_overlay_mermaid(),
+        )
+        .unwrap();
+        crate::layout::layout(&mut graph);
+        let theme = Theme::default();
+        let (width, height) = graph_bounds(&graph);
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame_with_theme(&graph, frame, &theme))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let telemetry_glyphs = ["┄", "┆", "▶", "▼", "▲", "◀"];
+
+        let has_muted_telemetry_glyph = (0..buf.area.height).any(|y| {
+            (0..buf.area.width).any(|x| {
+                telemetry_glyphs.contains(&buf[(x, y)].symbol()) && buf[(x, y)].fg == theme.muted
+            })
+        });
+        assert!(
+            has_muted_telemetry_glyph,
+            "at least one telemetry glyph should render with muted foreground"
+        );
     }
 
     fn dump_graph(name: &str, graph: &Graph, width: u16, height: u16) {

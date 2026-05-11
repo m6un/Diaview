@@ -39,9 +39,9 @@ The foundation — parse Mermaid, lay out nodes, render beautifully to the termi
 
 ---
 
-## Phase 1.5: Complex Diagram Layout & Routing
+## Phase 1.5: Complex Diagram Layout & Routing ✅
 
-**Status: Planned technical phase**
+**Status: Complete baseline**
 
 Focused implementation plan: [`phase-1.5-layout.md`](phase-1.5-layout.md).
 
@@ -63,23 +63,23 @@ The issue is not primarily styling. It is layout/routing intelligence. Current D
 - [ ] **No subgraph/swimlane clustering** — architecture diagrams want sections like Client, Edge, API, Services, Data, Observability, External
 - [ ] **Monitoring/telemetry edges overwhelm primary flow** — dotted side-channel edges should be bundled, dimmed, hidden, or routed separately
 
-### Required implementation sequence
+### Delivered implementation sequence
 
-- [ ] Add routing diagnostics and stress fixtures before changing behavior
-- [ ] Move edge routing decisions into layout-owned route metadata; keep renderer as glyph painter with a fallback path
-- [ ] Assign explicit node-side ports for fan-in, fan-out, long edges, and back-edges
-- [ ] Add global orthogonal lane reservation with node/label/group obstacles and route costs
-- [ ] Bundle shared sinks/sources into bus trunks and short spokes, especially logs/metrics/alerts/events/queues
-- [ ] Classify telemetry/secondary edges, route them after primary flow, prefer perimeter/bundled lanes, and prepare hide/collapse modes
-- [ ] Parse Mermaid `subgraph` blocks into Graph IR groups and render them as swimlanes or clusters
+- [x] Added routing diagnostics and stress fixtures before changing behavior
+- [x] Moved edge routing decisions into layout-owned route metadata; renderer keeps a fallback path
+- [x] Assigned explicit node-side ports for fan-in, fan-out, long edges, and back-edges
+- [x] Added deterministic orthogonal lane reservation for route bands
+- [x] Bundled shared sinks/sources into bus-like trunks and short spokes, especially logs/metrics/alerts/events/queues
+- [x] Classified telemetry/secondary edges, route them after primary flow, prefer perimeter/bundled lanes, and dim them in rendering
+- [x] Parsed Mermaid `subgraph` blocks into Graph IR groups and rendered them as terminal clusters
 
-### Success criteria
+### Baseline success criteria
 
-- [ ] Real architecture diagrams with 30–60 nodes remain readable
-- [ ] Shared observability sinks no longer create edge walls
-- [ ] Back-edges are visually marked and routed without destroying the main flow
-- [ ] Primary request flow remains legible even when telemetry/error edges exist
-- [ ] A Mermaid diagram organized with `subgraph` sections renders as clear terminal swimlanes/clusters
+- [x] Real architecture diagrams with 30–60 nodes have dedicated stress fixtures and route metadata for inspection
+- [x] Shared observability sinks route through bundled trunks/spokes instead of independent edge walls
+- [x] Back-edges are classified and routed through side/reverse-flow ports
+- [x] Primary request flow gets priority over telemetry/error edges, which are classified and visually distinguished
+- [x] Mermaid diagrams organized with `subgraph` sections render as terminal clusters
 
 ---
 

@@ -1,14 +1,20 @@
-# Phase 1.5 Layout/Routing Plan
+# Phase 1.5 Layout/Routing
 
-Goal: make 30–60 node architecture diagrams readable without replacing the owned Rust layout pipeline or changing the Mermaid-first model. Implement this as small, testable slices that preserve the current static renderer while moving routing decisions out of per-edge drawing and into layout-owned metadata.
+Status: complete baseline.
 
-## Current constraints
+Goal: make 30–60 node architecture diagrams readable without replacing the owned Rust layout pipeline or changing the Mermaid-first model. The implemented baseline keeps the static renderer intact while moving routing decisions out of per-edge drawing and into layout-owned metadata.
 
-- `src/layout.rs` sizes nodes, assigns layers, inserts dummy nodes for long edges, orders layers, and writes node coordinates only.
-- `src/renderer/canvas.rs` still computes ports and orthogonal bends locally while drawing each edge.
-- There is no global occupancy map for edge lanes, no model for groups/clusters, and no semantic distinction between primary flow and telemetry/side-channel edges.
+## Implemented baseline
 
-## Implementation sequence
+- `src/layout.rs` sizes nodes, assigns layers, inserts dummy nodes for long edges, orders layers, writes node coordinates, and computes route plans.
+- `src/model.rs` includes route metadata (`RoutePlan`, ports, lane ids, edge class, label anchor) and subgraph group metadata.
+- `src/renderer/canvas.rs` consumes route metadata when present and falls back to local routing when absent.
+- The layout pass classifies primary, telemetry, error, back-edge, and external edges.
+- High-degree/shared semantic endpoints are bundled into bus-like trunks/spokes.
+- Telemetry routes prefer perimeter lanes and render dimmer than primary flow.
+- Mermaid `subgraph` blocks parse into groups with computed bounds and muted terminal cluster rendering.
+
+## Implementation record
 
 ### 1. Stabilize layout diagnostics first
 

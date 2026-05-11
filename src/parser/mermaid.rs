@@ -21,6 +21,8 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     let mut nodes: Vec<Node> = Vec::new();
     let mut node_map: HashMap<String, usize> = HashMap::new();
     let mut edges: Vec<Edge> = Vec::new();
+    let mut groups: Vec<Group> = Vec::new();
+    let mut group_stack: Vec<usize> = Vec::new();
 
     // Collect all statements — split by `;` and by newlines.
     let mut statements: Vec<String> = Vec::new();
@@ -34,13 +36,36 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     }
 
     for stmt in &statements {
-        parse_statement(stmt, &mut nodes, &mut node_map, &mut edges)?;
+        if let Some(group) =
+            parse_subgraph_start(stmt, group_stack.last().map(|&idx| groups[idx].id.clone()))?
+        {
+            groups.push(group);
+            group_stack.push(groups.len() - 1);
+            continue;
+        }
+
+        if stmt.eq_ignore_ascii_case("end") {
+            group_stack
+                .pop()
+                .ok_or_else(|| "unexpected 'end' without matching subgraph".to_string())?;
+            continue;
+        }
+
+        let parsed_node_ids = parse_statement(stmt, &mut nodes, &mut node_map, &mut edges)?;
+        if let Some(&group_idx) = group_stack.last() {
+            add_group_members(&mut groups[group_idx], parsed_node_ids);
+        }
+    }
+
+    if !group_stack.is_empty() {
+        return Err("unclosed subgraph block".into());
     }
 
     Ok(Graph {
         direction,
         nodes,
         edges,
+        groups,
     })
 }
 
@@ -86,7 +111,7 @@ fn parse_statement(
     nodes: &mut Vec<Node>,
     node_map: &mut HashMap<String, usize>,
     edges: &mut Vec<Edge>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     // Try to parse as an edge statement. If the statement contains an edge
     // operator we treat it as an edge (which also registers the two endpoint
     // nodes). Otherwise it's a standalone node declaration.
@@ -96,12 +121,60 @@ fn parse_statement(
         ensure_node(nodes, node_map, &src_id, &src_shape, &src_label);
         ensure_node(nodes, node_map, &target_id, &target_shape, &target_label);
         edges.push(edge);
+        Ok(vec![src_id, target_id])
     } else {
         // Standalone node declaration.
         let (id, shape, label) = parse_node_decl(stmt)?;
         ensure_node(nodes, node_map, &id, &shape, &label);
+        Ok(vec![id])
     }
-    Ok(())
+}
+
+fn parse_subgraph_start(stmt: &str, parent: Option<String>) -> Result<Option<Group>, String> {
+    let Some(rest) = stmt.strip_prefix("subgraph") else {
+        return Ok(None);
+    };
+    let rest = rest.trim();
+    if rest.is_empty() {
+        return Err("subgraph missing id or label".into());
+    }
+
+    let (id, label) = if let Some(open) = rest.find('[') {
+        let id = rest[..open].trim();
+        validate_id(id)?;
+        let close = rest
+            .rfind(']')
+            .ok_or_else(|| format!("unclosed '[' in subgraph '{stmt}'"))?;
+        (id.to_string(), rest[open + 1..close].trim().to_string())
+    } else if let Some(open) = rest.find('(') {
+        let id = rest[..open].trim();
+        validate_id(id)?;
+        let close = rest
+            .rfind(')')
+            .ok_or_else(|| format!("unclosed '(' in subgraph '{stmt}'"))?;
+        (id.to_string(), rest[open + 1..close].trim().to_string())
+    } else {
+        (rest.to_string(), rest.to_string())
+    };
+
+    Ok(Some(Group {
+        id,
+        label,
+        node_ids: Vec::new(),
+        parent,
+        x: None,
+        y: None,
+        width: None,
+        height: None,
+    }))
+}
+
+fn add_group_members(group: &mut Group, node_ids: Vec<String>) {
+    for node_id in node_ids {
+        if !group.node_ids.iter().any(|existing| existing == &node_id) {
+            group.node_ids.push(node_id);
+        }
+    }
 }
 
 fn ensure_node(
@@ -200,6 +273,7 @@ fn try_parse_edge(
                 label,
                 style: style.clone(),
                 arrowhead: arrow.clone(),
+                route: None,
             };
             return Ok(Some((
                 src_id, src_shape, src_label, tgt_id, tgt_shape, tgt_label, edge,
@@ -250,6 +324,7 @@ fn try_inline_label_edge(
         label: Some(label_text),
         style,
         arrowhead: arrow,
+        route: None,
     };
 
     Ok(Some((
@@ -393,6 +468,31 @@ mod tests {
         "#;
         let graph = parse(input).unwrap();
         assert_eq!(graph, fixtures::diamond_decision());
+    }
+
+    #[test]
+    fn test_subgraphs_parse_groups_and_members() {
+        let input = r#"
+            graph TD
+            subgraph API[API Layer]
+                A[Gateway] --> B[Service]
+                subgraph Workers(Worker Pool)
+                    C[Worker]
+                end
+                B --> C
+            end
+        "#;
+        let graph = parse(input).unwrap();
+
+        assert_eq!(graph.groups.len(), 2);
+        assert_eq!(graph.groups[0].id, "API");
+        assert_eq!(graph.groups[0].label, "API Layer");
+        assert_eq!(graph.groups[0].parent, None);
+        assert_eq!(graph.groups[0].node_ids, vec!["A", "B", "C"]);
+        assert_eq!(graph.groups[1].id, "Workers");
+        assert_eq!(graph.groups[1].label, "Worker Pool");
+        assert_eq!(graph.groups[1].parent.as_deref(), Some("API"));
+        assert_eq!(graph.groups[1].node_ids, vec!["C"]);
     }
 
     #[test]
