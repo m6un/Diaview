@@ -168,6 +168,21 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
                 max_x = max_x.max(point.x + 2.0);
                 max_y = max_y.max(point.y + 2.0);
             }
+
+            if let Some(label) = &edge.label {
+                let anchor = route
+                    .label_anchor
+                    .as_ref()
+                    .or_else(|| route.points.get(route.points.len() / 2));
+                if let Some(anchor) = anchor {
+                    let label_width = label.chars().count() as u16;
+                    let lx =
+                        (anchor.x.max(0.0).round() as u16).saturating_sub((label.len() / 2) as u16);
+                    let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
+                    max_x = max_x.max((lx + label_width + 1) as f64);
+                    max_y = max_y.max((ly + 2) as f64);
+                }
+            }
         }
     }
 
@@ -595,6 +610,14 @@ fn dirs_to_char(dirs: u8) -> char {
     }
 }
 
+fn add_dir(cells: &mut Vec<((u16, u16), u8)>, point: (u16, u16), dir: u8) {
+    if let Some((_, dirs)) = cells.iter_mut().find(|(existing, _)| *existing == point) {
+        *dirs |= dir;
+    } else {
+        cells.push((point, dir));
+    }
+}
+
 fn glyph_dirs(ch: char) -> u8 {
     match ch {
         '│' => DIR_UP | DIR_DOWN,
@@ -603,6 +626,11 @@ fn glyph_dirs(ch: char) -> u8 {
         '┐' => DIR_DOWN | DIR_LEFT,
         '└' => DIR_UP | DIR_RIGHT,
         '┘' => DIR_UP | DIR_LEFT,
+        '├' => DIR_UP | DIR_DOWN | DIR_RIGHT,
+        '┤' => DIR_UP | DIR_DOWN | DIR_LEFT,
+        '┬' => DIR_LEFT | DIR_RIGHT | DIR_DOWN,
+        '┴' => DIR_LEFT | DIR_RIGHT | DIR_UP,
+        '┼' => DIR_UP | DIR_DOWN | DIR_LEFT | DIR_RIGHT,
         _ => 0,
     }
 }
@@ -692,6 +720,37 @@ fn render_edge(
         }
     };
 
+    let set_cell_dirs = |buf: &mut ratatui::buffer::Buffer,
+                         px: u16,
+                         py: u16,
+                         dirs: u8,
+                         style: Style,
+                         nodes: &[Node]| {
+        if px < buf.area.x + buf.area.width
+            && py < buf.area.y + buf.area.height
+            && py >= buf.area.y
+            && !is_inside_any_node(px, py, nodes)
+        {
+            if edge.style == EdgeStyle::Solid {
+                let existing_dirs = char_to_dirs(buf[(px, py)].symbol());
+                let merged_dirs = existing_dirs | dirs;
+                if merged_dirs != 0 {
+                    buf[(px, py)]
+                        .set_char(dirs_to_char(merged_dirs))
+                        .set_style(style);
+                    return;
+                }
+            }
+
+            let ch = if dirs & (DIR_LEFT | DIR_RIGHT) != 0 {
+                edge_h_char(&edge.style)
+            } else {
+                edge_v_char(&edge.style)
+            };
+            buf[(px, py)].set_char(ch).set_style(style);
+        }
+    };
+
     let min_max = |a: u16, b: u16| if a < b { (a, b) } else { (b, a) };
 
     if let Some(route) = &edge.route {
@@ -706,29 +765,55 @@ fn render_edge(
             })
             .collect();
 
+        let mut route_cells = Vec::new();
+        if let Some(&first) = route_points.first() {
+            route_cells.push(first);
+        }
         for segment in route_points.windows(2) {
+            let (mut x, mut y) = segment[0];
+            let (x1, y1) = segment[1];
+
+            while x != x1 {
+                if x1 > x {
+                    x += 1;
+                } else {
+                    x = x.saturating_sub(1);
+                }
+                route_cells.push((x, y));
+            }
+
+            while y != y1 {
+                if y1 > y {
+                    y += 1;
+                } else {
+                    y = y.saturating_sub(1);
+                }
+                route_cells.push((x, y));
+            }
+        }
+
+        let mut cell_dirs: Vec<((u16, u16), u8)> = Vec::new();
+        for segment in route_cells.windows(2) {
             let (x0, y0) = segment[0];
             let (x1, y1) = segment[1];
-            if x0 == x1 {
-                let (a, b) = min_max(y0, y1);
-                for y in a..=b {
-                    set_cell(buf, x0, y, edge_v_char(&edge.style), edge_style, all_nodes);
-                }
-            } else if y0 == y1 {
-                let (a, b) = min_max(x0, x1);
-                for x in a..=b {
-                    set_cell(buf, x, y0, edge_h_char(&edge.style), edge_style, all_nodes);
-                }
+            let (from_dir, to_dir) = if x1 > x0 {
+                (DIR_RIGHT, DIR_LEFT)
+            } else if x1 < x0 {
+                (DIR_LEFT, DIR_RIGHT)
+            } else if y1 > y0 {
+                (DIR_DOWN, DIR_UP)
+            } else if y1 < y0 {
+                (DIR_UP, DIR_DOWN)
             } else {
-                let (a, b) = min_max(x0, x1);
-                for x in a..=b {
-                    set_cell(buf, x, y0, edge_h_char(&edge.style), edge_style, all_nodes);
-                }
-                let (a, b) = min_max(y0, y1);
-                for y in a..=b {
-                    set_cell(buf, x1, y, edge_v_char(&edge.style), edge_style, all_nodes);
-                }
-            }
+                continue;
+            };
+
+            add_dir(&mut cell_dirs, (x0, y0), from_dir);
+            add_dir(&mut cell_dirs, (x1, y1), to_dir);
+        }
+
+        for ((x, y), dirs) in cell_dirs {
+            set_cell_dirs(buf, x, y, dirs, edge_style, all_nodes);
         }
 
         if let Some((&end, prev)) = route_points.last().zip(route_points.iter().rev().nth(1)) {
@@ -1154,6 +1239,89 @@ mod tests {
         assert!(
             output.contains("\x1b[49m"),
             "inline output should reset background color"
+        );
+    }
+
+    #[test]
+    fn test_routed_label_extends_inline_bounds() {
+        let mut graph = crate::parser::mermaid::parse(
+            r#"
+            graph LR
+            A[Start] -->|metrics| B[End]
+            "#,
+        )
+        .unwrap();
+        crate::layout::layout(&mut graph);
+
+        let output = render_to_string(&graph).unwrap();
+        assert!(
+            output.contains("metrics"),
+            "routed edge label should not be clipped in inline output:\n{output}"
+        );
+    }
+
+    #[test]
+    fn test_single_routed_bend_does_not_render_crossing_glyph() {
+        let graph = Graph {
+            direction: Direction::TopDown,
+            nodes: vec![
+                Node {
+                    id: "A".into(),
+                    label: "A".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(20.0),
+                    y: Some(0.0),
+                    width: Some(5.0),
+                    height: Some(3.0),
+                },
+                Node {
+                    id: "B".into(),
+                    label: "B".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(20.0),
+                    y: Some(8.0),
+                    width: Some(5.0),
+                    height: Some(3.0),
+                },
+            ],
+            edges: vec![Edge {
+                source: "A".into(),
+                target: "B".into(),
+                label: None,
+                style: EdgeStyle::Solid,
+                arrowhead: Arrowhead::None,
+                route: Some(RoutePlan {
+                    points: vec![
+                        RoutePoint { x: 2.0, y: 2.0 },
+                        RoutePoint { x: 6.0, y: 2.0 },
+                        RoutePoint { x: 6.0, y: 5.0 },
+                    ],
+                    source_port: Port {
+                        x: 2.0,
+                        y: 2.0,
+                        side: PortSide::Right,
+                    },
+                    target_port: Port {
+                        x: 6.0,
+                        y: 5.0,
+                        side: PortSide::Top,
+                    },
+                    lane_id: None,
+                    class: EdgeClass::Primary,
+                    label_anchor: None,
+                }),
+            }],
+            groups: vec![],
+        };
+
+        let output = render_to_string(&graph).unwrap();
+        assert!(
+            !output.contains('┼'),
+            "single routed bend should not render as a crossing:\n{output}"
+        );
+        assert!(
+            output.contains('┐'),
+            "single routed bend should render as a corner:\n{output}"
         );
     }
 
