@@ -684,6 +684,7 @@ fn assign_route_plans(graph: &mut Graph) {
     let target_offsets = port_offsets(&target_keys);
     let bundles = detect_bundles(graph, &node_by_id);
     let perimeter = graph_perimeter(&graph.nodes);
+    let telemetry_degrees = telemetry_degrees(graph, &classes);
     let mut lane_allocator = LaneAllocator::default();
 
     for (idx, edge) in graph.edges.iter_mut().enumerate() {
@@ -707,7 +708,9 @@ fn assign_route_plans(graph: &mut Graph) {
                 Some(lane_id),
                 orthogonal_points(&graph.direction, &source_port, &target_port, trunk_coord),
             )
-        } else if *class == EdgeClass::Telemetry {
+        } else if *class == EdgeClass::Telemetry
+            && should_route_telemetry_on_perimeter(edge, &telemetry_degrees)
+        {
             let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
             (
                 Some(lane.id),
@@ -944,22 +947,7 @@ fn bundle_for_edge(
 
 fn is_semantic_bus_endpoint(node: &Node) -> bool {
     let text = format!("{} {}", node.id, node.label).to_lowercase();
-    contains_any(
-        &text,
-        &[
-            "log",
-            "logs",
-            "metric",
-            "metrics",
-            "alert",
-            "alerts",
-            "event",
-            "events",
-            "queue",
-            "bus",
-            "telemetry",
-        ],
-    )
+    contains_bus_term(&text)
 }
 
 fn bundle_trunk_coordinate(
@@ -992,18 +980,7 @@ fn classify_edge(
     }
     if edge.style == EdgeStyle::Dashed
         || edge.style == EdgeStyle::Dotted
-        || contains_any(
-            &text,
-            &[
-                "log",
-                "metric",
-                "trace",
-                "alert",
-                "monitor",
-                "telemetry",
-                "observability",
-            ],
-        )
+        || contains_telemetry_term(&text)
     {
         return EdgeClass::Telemetry;
     }
@@ -1040,6 +1017,58 @@ fn edge_text(edge: &Edge, nodes: &HashMap<String, Node>) -> String {
 
 fn contains_any(text: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| text.contains(needle))
+}
+
+fn contains_telemetry_term(text: &str) -> bool {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            matches!(
+                token,
+                "log"
+                    | "logs"
+                    | "metric"
+                    | "metrics"
+                    | "trace"
+                    | "traces"
+                    | "alert"
+                    | "alerts"
+                    | "telemetry"
+                    | "observability"
+            ) || token.starts_with("monitor")
+        })
+}
+
+fn contains_bus_term(text: &str) -> bool {
+    text.split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| {
+            matches!(token, "event" | "events" | "queue" | "bus") || contains_telemetry_term(token)
+        })
+}
+
+fn telemetry_degrees(graph: &Graph, classes: &[EdgeClass]) -> HashMap<String, usize> {
+    let mut degrees = HashMap::new();
+    for (edge, class) in graph.edges.iter().zip(classes.iter()) {
+        if *class == EdgeClass::Telemetry {
+            *degrees.entry(edge.source.clone()).or_default() += 1;
+            *degrees.entry(edge.target.clone()).or_default() += 1;
+        }
+    }
+    degrees
+}
+
+fn should_route_telemetry_on_perimeter(
+    edge: &Edge,
+    telemetry_degrees: &HashMap<String, usize>,
+) -> bool {
+    const PERIMETER_TELEMETRY_DEGREE: usize = 3;
+    telemetry_degrees
+        .get(&edge.source)
+        .copied()
+        .unwrap_or(0)
+        .max(telemetry_degrees.get(&edge.target).copied().unwrap_or(0))
+        >= PERIMETER_TELEMETRY_DEGREE
 }
 
 fn is_back_edge(
@@ -1725,6 +1754,53 @@ mod tests {
         assert!(
             unique_lane_ids.len() > 1,
             "ordinary fan-out routes should reserve multiple lanes instead of one wall"
+        );
+    }
+
+    #[test]
+    fn login_is_not_misclassified_as_telemetry() {
+        let mut graph = crate::parser::mermaid::parse(fixtures::simple_mermaid())
+            .expect("simple fixture should parse");
+        layout(&mut graph);
+
+        let login_edge = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == "AUTH" && edge.target == "LOGIN")
+            .expect("simple fixture should include auth-to-login edge");
+        assert_ne!(
+            login_edge.route.as_ref().map(|route| &route.class),
+            Some(&EdgeClass::Telemetry),
+            "Login contains the letters 'log' but must not be routed as telemetry"
+        );
+    }
+
+    #[test]
+    fn single_telemetry_edge_uses_local_route_instead_of_perimeter_wall() {
+        let mut graph = crate::parser::mermaid::parse(fixtures::simple_mermaid())
+            .expect("simple fixture should parse");
+        layout(&mut graph);
+
+        let max_node_right = graph
+            .nodes
+            .iter()
+            .filter(|node| !node.id.starts_with("__dummy"))
+            .map(|node| node.x.unwrap() + node.width.unwrap())
+            .fold(0.0_f64, f64::max);
+        let telemetry_edge = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == "WORKER" && edge.target == "METRICS")
+            .expect("simple fixture should include worker-to-metrics telemetry edge");
+        let route = telemetry_edge
+            .route
+            .as_ref()
+            .expect("edge should have a route");
+
+        assert_eq!(route.class, EdgeClass::Telemetry);
+        assert!(
+            route.points.iter().all(|point| point.x <= max_node_right),
+            "one-off telemetry route should stay local instead of creating a perimeter side-wall"
         );
     }
 
