@@ -742,7 +742,11 @@ fn render_edge(
                 }
             }
 
-            let ch = if dirs & (DIR_LEFT | DIR_RIGHT) != 0 {
+            let has_horizontal = dirs & (DIR_LEFT | DIR_RIGHT) != 0;
+            let has_vertical = dirs & (DIR_UP | DIR_DOWN) != 0;
+            let ch = if has_horizontal && has_vertical {
+                dirs_to_char(dirs)
+            } else if has_horizontal {
                 edge_h_char(&edge.style)
             } else {
                 edge_v_char(&edge.style)
@@ -1261,68 +1265,80 @@ mod tests {
     }
 
     #[test]
-    fn test_single_routed_bend_does_not_render_crossing_glyph() {
-        let graph = Graph {
-            direction: Direction::TopDown,
-            nodes: vec![
-                Node {
-                    id: "A".into(),
-                    label: "A".into(),
-                    shape: NodeShape::Rectangle,
-                    x: Some(20.0),
-                    y: Some(0.0),
-                    width: Some(5.0),
-                    height: Some(3.0),
-                },
-                Node {
-                    id: "B".into(),
-                    label: "B".into(),
-                    shape: NodeShape::Rectangle,
-                    x: Some(20.0),
-                    y: Some(8.0),
-                    width: Some(5.0),
-                    height: Some(3.0),
-                },
-            ],
-            edges: vec![Edge {
-                source: "A".into(),
-                target: "B".into(),
-                label: None,
-                style: EdgeStyle::Solid,
-                arrowhead: Arrowhead::None,
-                route: Some(RoutePlan {
-                    points: vec![
-                        RoutePoint { x: 2.0, y: 2.0 },
-                        RoutePoint { x: 6.0, y: 2.0 },
-                        RoutePoint { x: 6.0, y: 5.0 },
-                    ],
-                    source_port: Port {
-                        x: 2.0,
-                        y: 2.0,
-                        side: PortSide::Right,
+    fn test_single_dashed_and_dotted_routed_bends_use_corner_glyphs() {
+        for (style, horizontal, vertical) in
+            [(EdgeStyle::Dashed, '╌', '╎'), (EdgeStyle::Dotted, '┄', '┆')]
+        {
+            let graph = Graph {
+                direction: Direction::TopDown,
+                nodes: vec![
+                    Node {
+                        id: "A".into(),
+                        label: "A".into(),
+                        shape: NodeShape::Rectangle,
+                        x: Some(20.0),
+                        y: Some(0.0),
+                        width: Some(5.0),
+                        height: Some(3.0),
                     },
-                    target_port: Port {
-                        x: 6.0,
-                        y: 5.0,
-                        side: PortSide::Top,
+                    Node {
+                        id: "B".into(),
+                        label: "B".into(),
+                        shape: NodeShape::Rectangle,
+                        x: Some(20.0),
+                        y: Some(8.0),
+                        width: Some(5.0),
+                        height: Some(3.0),
                     },
-                    lane_id: None,
-                    class: EdgeClass::Primary,
-                    label_anchor: None,
-                }),
-            }],
-            groups: vec![],
-        };
+                ],
+                edges: vec![Edge {
+                    source: "A".into(),
+                    target: "B".into(),
+                    label: None,
+                    style,
+                    arrowhead: Arrowhead::None,
+                    route: Some(RoutePlan {
+                        points: vec![
+                            RoutePoint { x: 2.0, y: 2.0 },
+                            RoutePoint { x: 6.0, y: 2.0 },
+                            RoutePoint { x: 6.0, y: 5.0 },
+                        ],
+                        source_port: Port {
+                            x: 2.0,
+                            y: 2.0,
+                            side: PortSide::Right,
+                        },
+                        target_port: Port {
+                            x: 6.0,
+                            y: 5.0,
+                            side: PortSide::Top,
+                        },
+                        lane_id: None,
+                        class: EdgeClass::Primary,
+                        label_anchor: None,
+                    }),
+                }],
+                groups: vec![],
+            };
 
-        let output = render_to_string(&graph).unwrap();
-        assert!(
-            !output.contains('┼'),
-            "single routed bend should not render as a crossing:\n{output}"
-        );
-        assert!(
-            output.contains('┐'),
-            "single routed bend should render as a corner:\n{output}"
-        );
+            let output = render_to_string(&graph).unwrap();
+            assert!(
+                !output.contains('┼'),
+                "single routed bend should not render as a crossing:\n{output}"
+            );
+            assert!(
+                output.contains('┐'),
+                "single routed bend should render as a corner:\n{output}"
+            );
+            assert!(
+                output.contains(horizontal),
+                "routed straight horizontal cells should keep the edge style:\n{output}"
+            );
+            assert!(
+                output.contains(vertical),
+                "routed straight vertical cells should keep the edge style:\n{output}"
+            );
+        }
     }
 
     #[test]
