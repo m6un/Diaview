@@ -666,10 +666,30 @@ fn routed_render_points(route: &RoutePlan) -> Vec<(u16, u16)> {
         points.insert(1, source_stub);
     }
 
-    let last_index = points.len() - 1;
-    let target_tail = offset_point(points[last_index], outward_delta(&route.target_port.side));
-    if last_index == 0 || points.get(last_index - 1).copied() != Some(target_tail) {
-        points.insert(last_index, target_tail);
+    let target_index = points.len() - 1;
+    let target_tail = offset_point(points[target_index], outward_delta(&route.target_port.side));
+    if target_index == 0 || points.get(target_index - 1).copied() != Some(target_tail) {
+        points.insert(target_index, target_tail);
+
+        // If the existing route approached the target on the arrowhead row/column,
+        // make it turn onto the tail row/column before the arrowhead. Otherwise a
+        // `▼` can still have a horizontal segment attached to it, which reads as a
+        // sideways arrow with the wrong head. The final segment into the target must
+        // be the one-cell tail in the arrow direction.
+        let tail_index = points.len() - 2;
+        if tail_index > 0 {
+            let prev = points[tail_index - 1];
+            let tail = points[tail_index];
+            if prev.0 != tail.0 && prev.1 != tail.1 {
+                let pre_tail = match route.target_port.side {
+                    PortSide::Top | PortSide::Bottom => (prev.0, tail.1),
+                    PortSide::Left | PortSide::Right => (tail.0, prev.1),
+                };
+                if pre_tail != prev && pre_tail != tail {
+                    points.insert(tail_index, pre_tail);
+                }
+            }
+        }
     }
 
     points
@@ -1455,6 +1475,11 @@ mod tests {
             glyph_dirs(buf[(13, 6)].symbol().chars().next().unwrap()) & DIR_DOWN != 0,
             "tail cell above ▼ should connect downward, got {:?}",
             buf[(13, 6)].symbol()
+        );
+        assert_eq!(
+            buf[(14, 7)].symbol(),
+            " ",
+            "arrowhead row should not keep a horizontal segment attached to the ▼"
         );
     }
 
