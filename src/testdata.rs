@@ -110,6 +110,9 @@ pub mod fixtures {
         }
     }
 
+    /// Medium-complexity demo graph intended for regular visual inspection.
+    pub const SIMPLE_MERMAID: &str = include_str!("../fixtures/simple.mmd");
+
     /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
     pub const COMPLEX_ARCHITECTURE_MERMAID: &str =
         include_str!("../fixtures/complex_architecture.mmd");
@@ -202,6 +205,11 @@ flowchart TD
     DATA_SEARCH -.-> OBS_METRICS
     OBS_METRICS --> EXT_PAGER[External / Pager]
 "#;
+
+    /// Medium-complexity demo graph intended for regular visual inspection.
+    pub fn simple_mermaid() -> &'static str {
+        SIMPLE_MERMAID
+    }
 
     /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
     pub fn complex_architecture_mermaid() -> &'static str {
@@ -359,6 +367,24 @@ mod tests {
             .unwrap_or_else(|err| panic!("{name} fixture failed to parse: {err}"));
         crate::layout::layout(&mut graph);
         graph
+    }
+
+    #[test]
+    fn simple_fixture_parses_layouts_and_renders() {
+        let mut graph = crate::parser::mermaid::parse(fixtures::simple_mermaid()).unwrap();
+        assert_eq!(graph.nodes.len(), 14);
+        assert_eq!(graph.edges.len(), 13);
+        assert!(graph.groups.is_empty());
+        assert!(graph.nodes.iter().any(|node| node.id == "ROUTER"));
+        assert!(graph.nodes.iter().any(|node| node.id == "METRICS"));
+
+        crate::layout::layout(&mut graph);
+        assert_all_positioned(&graph);
+        assert_no_node_rectangle_overlaps(&graph);
+
+        let rendered = crate::renderer::canvas::render_to_string(&graph).unwrap();
+        assert!(rendered.contains("Request Router"));
+        assert!(rendered.contains("Metrics"));
     }
 
     #[test]

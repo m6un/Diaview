@@ -1,0 +1,14 @@
+flowchart TD
+    REQ[Request] --> AUTH{Authenticated?}
+    AUTH -- no --> LOGIN[Login Required]
+    AUTH -- yes --> RATE{Rate OK?}
+    RATE -- no --> THROTTLED[Throttled]
+    RATE -- yes --> ROUTER[Request Router]
+    ROUTER --> PROFILE[Profile Service]
+    ROUTER --> ORDERS[Order Service]
+    PROFILE --> CACHE[Redis Cache]
+    PROFILE --> USERDB((User DB))
+    ORDERS --> QUEUE[Job Queue]
+    QUEUE --> WORKER[Worker]
+    WORKER --> ORDERDB((Order DB))
+    WORKER -.-> METRICS[Metrics]

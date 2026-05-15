@@ -19,7 +19,7 @@ fn main() {
             eprintln!("Failed to read file '{path}': {e}");
             std::process::exit(1);
         }),
-        None => fixtures::complex_architecture_mermaid().to_string(),
+        None => fixtures::simple_mermaid().to_string(),
     };
 
     let mut graph = mermaid::parse(&input).unwrap_or_else(|e| {
