@@ -14,7 +14,9 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::model::{Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape};
+use crate::model::{
+    Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape, PortSide, RoutePlan,
+};
 use crate::theme::{NodeTheme, Theme};
 
 /// Full terminal render — sets up crossterm, renders, waits for keypress, cleans up.
@@ -164,9 +166,9 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
 
     for edge in &graph.edges {
         if let Some(route) = &edge.route {
-            for point in &route.points {
-                max_x = max_x.max(point.x + 2.0);
-                max_y = max_y.max(point.y + 2.0);
+            for (x, y) in routed_render_points(route) {
+                max_x = max_x.max(x as f64 + 2.0);
+                max_y = max_y.max(y as f64 + 2.0);
             }
 
             if let Some(label) = &edge.label {
@@ -618,6 +620,61 @@ fn add_dir(cells: &mut Vec<((u16, u16), u8)>, point: (u16, u16), dir: u8) {
     }
 }
 
+fn rounded_point(x: f64, y: f64) -> (u16, u16) {
+    (x.max(0.0).round() as u16, y.max(0.0).round() as u16)
+}
+
+fn outward_delta(side: &PortSide) -> (i32, i32) {
+    match side {
+        PortSide::Top => (0, -1),
+        PortSide::Right => (1, 0),
+        PortSide::Bottom => (0, 1),
+        PortSide::Left => (-1, 0),
+    }
+}
+
+fn offset_point(point: (u16, u16), delta: (i32, i32)) -> (u16, u16) {
+    (
+        (point.0 as i32 + delta.0).max(0) as u16,
+        (point.1 as i32 + delta.1).max(0) as u16,
+    )
+}
+
+fn push_distinct(points: &mut Vec<(u16, u16)>, point: (u16, u16)) {
+    if points.last().copied() != Some(point) {
+        points.push(point);
+    }
+}
+
+fn routed_render_points(route: &RoutePlan) -> Vec<(u16, u16)> {
+    let source_port = rounded_point(route.source_port.x, route.source_port.y);
+    let target_port = rounded_point(route.target_port.x, route.target_port.y);
+
+    let mut points = Vec::new();
+    push_distinct(&mut points, source_port);
+    for point in &route.points {
+        push_distinct(&mut points, rounded_point(point.x, point.y));
+    }
+    push_distinct(&mut points, target_port);
+
+    if points.is_empty() {
+        return points;
+    }
+
+    let source_stub = offset_point(points[0], outward_delta(&route.source_port.side));
+    if points.get(1).copied() != Some(source_stub) {
+        points.insert(1, source_stub);
+    }
+
+    let last_index = points.len() - 1;
+    let target_tail = offset_point(points[last_index], outward_delta(&route.target_port.side));
+    if last_index == 0 || points.get(last_index - 1).copied() != Some(target_tail) {
+        points.insert(last_index, target_tail);
+    }
+
+    points
+}
+
 fn glyph_dirs(ch: char) -> u8 {
     match ch {
         '│' => DIR_UP | DIR_DOWN,
@@ -758,16 +815,7 @@ fn render_edge(
     let min_max = |a: u16, b: u16| if a < b { (a, b) } else { (b, a) };
 
     if let Some(route) = &edge.route {
-        let route_points: Vec<(u16, u16)> = route
-            .points
-            .iter()
-            .map(|point| {
-                (
-                    point.x.max(0.0).round() as u16,
-                    point.y.max(0.0).round() as u16,
-                )
-            })
-            .collect();
+        let route_points = routed_render_points(route);
 
         let mut route_cells = Vec::new();
         if let Some(&first) = route_points.first() {
@@ -1339,6 +1387,213 @@ mod tests {
                 "routed straight vertical cells should keep the edge style:\n{output}"
             );
         }
+    }
+
+    #[test]
+    fn test_routed_top_port_arrowhead_has_immediate_tail_cell() {
+        let graph = Graph {
+            direction: Direction::TopDown,
+            nodes: vec![
+                Node {
+                    id: "A".into(),
+                    label: "A".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(2.0),
+                    y: Some(1.0),
+                    width: Some(6.0),
+                    height: Some(3.0),
+                },
+                Node {
+                    id: "B".into(),
+                    label: "B".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(10.0),
+                    y: Some(8.0),
+                    width: Some(6.0),
+                    height: Some(3.0),
+                },
+            ],
+            edges: vec![Edge {
+                source: "A".into(),
+                target: "B".into(),
+                label: None,
+                style: EdgeStyle::Solid,
+                arrowhead: Arrowhead::Normal,
+                route: Some(RoutePlan {
+                    points: vec![
+                        RoutePoint { x: 5.0, y: 4.0 },
+                        RoutePoint { x: 20.0, y: 4.0 },
+                        RoutePoint { x: 20.0, y: 7.0 },
+                        RoutePoint { x: 13.0, y: 7.0 },
+                    ],
+                    source_port: Port {
+                        x: 5.0,
+                        y: 4.0,
+                        side: PortSide::Bottom,
+                    },
+                    target_port: Port {
+                        x: 13.0,
+                        y: 7.0,
+                        side: PortSide::Top,
+                    },
+                    lane_id: None,
+                    class: EdgeClass::Primary,
+                    label_anchor: None,
+                }),
+            }],
+            groups: vec![],
+        };
+        let backend = TestBackend::new(26, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+
+        assert_eq!(buf[(13, 7)].symbol(), "▼");
+        assert!(
+            glyph_dirs(buf[(13, 6)].symbol().chars().next().unwrap()) & DIR_DOWN != 0,
+            "tail cell above ▼ should connect downward, got {:?}",
+            buf[(13, 6)].symbol()
+        );
+    }
+
+    #[test]
+    fn test_routed_bottom_source_port_gets_vertical_stub_before_horizontal_turn() {
+        let graph = Graph {
+            direction: Direction::TopDown,
+            nodes: vec![
+                Node {
+                    id: "A".into(),
+                    label: "A".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(2.0),
+                    y: Some(1.0),
+                    width: Some(6.0),
+                    height: Some(3.0),
+                },
+                Node {
+                    id: "B".into(),
+                    label: "B".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(12.0),
+                    y: Some(8.0),
+                    width: Some(6.0),
+                    height: Some(3.0),
+                },
+            ],
+            edges: vec![Edge {
+                source: "A".into(),
+                target: "B".into(),
+                label: None,
+                style: EdgeStyle::Solid,
+                arrowhead: Arrowhead::None,
+                route: Some(RoutePlan {
+                    points: vec![
+                        RoutePoint { x: 5.0, y: 4.0 },
+                        RoutePoint { x: 15.0, y: 4.0 },
+                        RoutePoint { x: 15.0, y: 7.0 },
+                    ],
+                    source_port: Port {
+                        x: 5.0,
+                        y: 4.0,
+                        side: PortSide::Bottom,
+                    },
+                    target_port: Port {
+                        x: 15.0,
+                        y: 7.0,
+                        side: PortSide::Top,
+                    },
+                    lane_id: None,
+                    class: EdgeClass::Primary,
+                    label_anchor: None,
+                }),
+            }],
+            groups: vec![],
+        };
+        let backend = TestBackend::new(24, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame(&graph, frame))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+
+        assert_eq!(buf[(5, 4)].symbol(), "│");
+        assert!(
+            glyph_dirs(buf[(5, 5)].symbol().chars().next().unwrap()) & DIR_UP != 0,
+            "source stub should continue down to the turn, got {:?}",
+            buf[(5, 5)].symbol()
+        );
+    }
+
+    #[test]
+    fn test_dotted_telemetry_routed_edge_starts_at_source_port() {
+        let graph = Graph {
+            direction: Direction::TopDown,
+            nodes: vec![
+                Node {
+                    id: "A".into(),
+                    label: "A".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(2.0),
+                    y: Some(1.0),
+                    width: Some(6.0),
+                    height: Some(3.0),
+                },
+                Node {
+                    id: "B".into(),
+                    label: "B".into(),
+                    shape: NodeShape::Rectangle,
+                    x: Some(12.0),
+                    y: Some(8.0),
+                    width: Some(6.0),
+                    height: Some(3.0),
+                },
+            ],
+            edges: vec![Edge {
+                source: "A".into(),
+                target: "B".into(),
+                label: None,
+                style: EdgeStyle::Dotted,
+                arrowhead: Arrowhead::None,
+                route: Some(RoutePlan {
+                    points: vec![
+                        RoutePoint { x: 5.0, y: 4.0 },
+                        RoutePoint { x: 15.0, y: 4.0 },
+                        RoutePoint { x: 15.0, y: 7.0 },
+                    ],
+                    source_port: Port {
+                        x: 5.0,
+                        y: 4.0,
+                        side: PortSide::Bottom,
+                    },
+                    target_port: Port {
+                        x: 15.0,
+                        y: 7.0,
+                        side: PortSide::Top,
+                    },
+                    lane_id: None,
+                    class: EdgeClass::Telemetry,
+                    label_anchor: None,
+                }),
+            }],
+            groups: vec![],
+        };
+        let theme = Theme::default();
+        let backend = TestBackend::new(24, 14);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|frame| render_to_frame_with_theme(&graph, frame, &theme))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+
+        assert_eq!(buf[(5, 4)].symbol(), "┆");
+        assert_eq!(buf[(5, 4)].fg, theme.muted);
+        assert_ne!(
+            buf[(6, 4)].symbol(),
+            "┄",
+            "telemetry edge should not begin as a detached horizontal run"
+        );
     }
 
     #[test]
