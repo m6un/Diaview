@@ -63,6 +63,6 @@ The long-term Visual REPL loop uses structured JSON IPC so a selected node plus 
 - `src/parser/mermaid.rs` — Mermaid flowchart parser
 - `src/layout.rs` — layout engine and long-edge routing prep
 - `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, edge routing, tests
-- `src/theme.rs` — static Catppuccin-inspired terminal theme
+- `src/theme.rs` — static Ayu Dark-inspired terminal theme
 - `src/testdata.rs` — reusable graph and Mermaid fixtures
 - `src/main.rs` — CLI entry point

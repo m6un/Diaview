@@ -16,7 +16,7 @@ The renderer should produce diagrams that feel native in Ghostty, tmux, neovim, 
 Recent visual polish moved the renderer toward:
 
 - 24-bit truecolor fills
-- soft Catppuccin-inspired colors
+- soft Ayu Dark-inspired colors
 - borderless filled cards where appropriate
 - semantic icons for non-rectangular shapes, e.g. `◆`, `●`
 - soft shadows

@@ -195,7 +195,7 @@ Render diagrams directly inside chat output — no full-screen takeover.
 **Status: Future**
 
 ### 5.1 Theming
-- [ ] Catppuccin, Dracula, Nord built-in themes
+- [ ] Ayu, Catppuccin, Dracula, Nord built-in themes
 - [ ] Theme config file (`~/.config/diaview/theme.toml`)
 - [ ] Semantic coloring (error nodes = red, success = green, etc.)
 

@@ -14,8 +14,8 @@ pub struct NodeTheme {
 /// Curated rendering palette for Diaview.
 ///
 /// This is intentionally static for now: no config files, no theme selector,
-/// and no terminal theme probing. The default uses a Srcery-inspired dark
-/// terminal palette tuned for modern terminals with 24-bit color support.
+/// and no terminal theme probing. The default uses Ayu Dark, adapted from
+/// https://github.com/postrednik/opencode-ayu-theme and the upstream Ayu palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
     pub background: Color,
@@ -32,40 +32,43 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// Srcery-inspired dark terminal palette for diagrams.
+    /// Ayu Dark terminal palette for diagrams.
     pub const fn default_dark() -> Self {
         Self {
-            // Palette adapted from terminalcolors.com Srcery Default.
-            background: Color::Rgb(28, 27, 25),    // background #1c1b19
-            text: Color::Rgb(252, 232, 195),       // foreground #fce8c3
-            muted: Color::Rgb(145, 129, 117),      // bright black #918175
-            edge: Color::Rgb(186, 166, 127),       // white/light grey #baa67f
-            edge_label: Color::Rgb(254, 208, 110), // bright yellow #fed06e
-            arrowhead: Color::Rgb(186, 166, 127),  // white/light grey #baa67f
-            shadow: Color::Rgb(15, 14, 13),
+            // Ayu base UI colors.
+            background: Color::Rgb(13, 16, 23),     // ayuBg #0D1017
+            text: Color::Rgb(191, 189, 182),        // ayuFg #BFBDB6
+            muted: Color::Rgb(98, 109, 122),        // ayuComment #626d7a
+            edge: Color::Rgb(108, 115, 128),        // ayuGutter #6C7380
+            edge_label: Color::Rgb(230, 180, 80),   // ayuAccent #E6B450
+            arrowhead: Color::Rgb(230, 180, 80),    // ayuAccent #E6B450
+            shadow: Color::Rgb(8, 10, 14),
+
+            // Shape colors map to the strongest semantic colors in Ayu:
+            // blue/entity, cyan/tag, yellow/accent, green/string.
             rectangle: NodeTheme {
-                border: Color::Rgb(104, 168, 228), // bright blue #68a8e4
-                fill: Color::Rgb(47, 47, 43),
-                text: Color::Rgb(252, 232, 195),   // foreground #fce8c3
-                icon: Color::Rgb(104, 168, 228),   // bright blue #68a8e4
+                border: Color::Rgb(122, 209, 255),  // lighter Ayu blue
+                fill: Color::Rgb(16, 20, 28),       // ayuEditorBg #10141C
+                text: Color::Rgb(191, 189, 182),    // ayuFg #BFBDB6
+                icon: Color::Rgb(122, 209, 255),
             },
             rounded_rect: NodeTheme {
-                border: Color::Rgb(152, 188, 55),  // bright green #98bc37
-                fill: Color::Rgb(43, 53, 38),
-                text: Color::Rgb(252, 232, 195),   // foreground #fce8c3
-                icon: Color::Rgb(152, 188, 55),    // bright green #98bc37
+                border: Color::Rgb(57, 186, 230),   // ayuTag #39BAE6
+                fill: Color::Rgb(20, 24, 33),       // ayuPanelBg #141821
+                text: Color::Rgb(191, 189, 182),
+                icon: Color::Rgb(57, 186, 230),
             },
             diamond: NodeTheme {
-                border: Color::Rgb(247, 83, 65),   // bright red #f75341
-                fill: Color::Rgb(58, 38, 32),
-                text: Color::Rgb(252, 232, 195),   // foreground #fce8c3
-                icon: Color::Rgb(247, 83, 65),     // bright red #f75341
+                border: Color::Rgb(255, 205, 102),  // lighter Ayu yellow
+                fill: Color::Rgb(32, 29, 20),       // warm dark accent surface
+                text: Color::Rgb(230, 192, 138),    // ayuSpecial #E6C08A
+                icon: Color::Rgb(255, 205, 102),
             },
             circle: NodeTheme {
-                border: Color::Rgb(255, 92, 143),  // bright magenta #ff5c8f
-                fill: Color::Rgb(54, 39, 53),
-                text: Color::Rgb(252, 232, 195),   // foreground #fce8c3
-                icon: Color::Rgb(255, 92, 143),    // bright magenta #ff5c8f
+                border: Color::Rgb(193, 235, 104),  // lighter Ayu green
+                fill: Color::Rgb(22, 31, 21),       // dark green surface
+                text: Color::Rgb(191, 189, 182),
+                icon: Color::Rgb(193, 235, 104),
             },
         }
     }
