@@ -521,3 +521,107 @@ fn error_and_back_edge_classification_precedes_telemetry() {
         EdgeClass::BackEdge
     );
 }
+
+fn cyclic_signal_graph(direction: Direction) -> Graph {
+    Graph {
+        direction,
+        nodes: vec![
+            node("WEBHOOK", "Temporal webhook", NodeShape::Rectangle),
+            node("WORKFLOW", "Workflow", NodeShape::Rectangle),
+            node("ACTIVITY", "Activity", NodeShape::Rectangle),
+            node("SIGNAL", "Signal loop", NodeShape::Rectangle),
+        ],
+        edges: vec![
+            edge("WEBHOOK", "WORKFLOW"),
+            edge("WORKFLOW", "ACTIVITY"),
+            edge("ACTIVITY", "SIGNAL"),
+            edge("SIGNAL", "WORKFLOW"),
+            edge("SIGNAL", "WEBHOOK"),
+        ],
+        groups: vec![],
+    }
+}
+
+#[test]
+fn topdown_back_edges_use_right_outer_perimeter_lanes() {
+    let mut graph = cyclic_signal_graph(Direction::TopDown);
+    layout(&mut graph);
+    let max_node_right = graph
+        .nodes
+        .iter()
+        .filter(|node| !node.id.starts_with("__dummy"))
+        .map(|node| node.x.unwrap() + node.width.unwrap())
+        .fold(0.0_f64, f64::max);
+    let back_routes: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source == "SIGNAL")
+        .map(|edge| edge.route.as_ref().unwrap())
+        .collect();
+    assert_eq!(back_routes.len(), 2);
+    for route in &back_routes {
+        assert_eq!(route.class, EdgeClass::BackEdge);
+        assert_eq!(route.source_port.side, PortSide::Right);
+        assert_eq!(route.target_port.side, PortSide::Right);
+        assert!(route.points.iter().any(|point| point.x > max_node_right));
+    }
+    let lane_ids: HashSet<_> = back_routes
+        .iter()
+        .map(|route| route.lane_id.unwrap())
+        .collect();
+    let lane_xs: HashSet<_> = back_routes
+        .iter()
+        .map(|route| {
+            route
+                .points
+                .iter()
+                .map(|point| point.x)
+                .fold(0.0_f64, f64::max)
+                .round() as i64
+        })
+        .collect();
+    assert_eq!(lane_ids.len(), 2);
+    assert_eq!(lane_xs.len(), 2);
+}
+
+#[test]
+fn leftright_back_edges_use_bottom_outer_perimeter_lanes() {
+    let mut graph = cyclic_signal_graph(Direction::LeftRight);
+    layout(&mut graph);
+    let max_node_bottom = graph
+        .nodes
+        .iter()
+        .filter(|node| !node.id.starts_with("__dummy"))
+        .map(|node| node.y.unwrap() + node.height.unwrap())
+        .fold(0.0_f64, f64::max);
+    let back_routes: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.source == "SIGNAL")
+        .map(|edge| edge.route.as_ref().unwrap())
+        .collect();
+    assert_eq!(back_routes.len(), 2);
+    for route in &back_routes {
+        assert_eq!(route.class, EdgeClass::BackEdge);
+        assert_eq!(route.source_port.side, PortSide::Bottom);
+        assert_eq!(route.target_port.side, PortSide::Bottom);
+        assert!(route.points.iter().any(|point| point.y > max_node_bottom));
+    }
+    let lane_ids: HashSet<_> = back_routes
+        .iter()
+        .map(|route| route.lane_id.unwrap())
+        .collect();
+    let lane_ys: HashSet<_> = back_routes
+        .iter()
+        .map(|route| {
+            route
+                .points
+                .iter()
+                .map(|point| point.y)
+                .fold(0.0_f64, f64::max)
+                .round() as i64
+        })
+        .collect();
+    assert_eq!(lane_ids.len(), 2);
+    assert_eq!(lane_ys.len(), 2);
+}

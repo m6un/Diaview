@@ -5,7 +5,7 @@ use std::collections::HashMap;
 ///
 /// Supports:
 /// - `graph TD`, `graph LR`, `flowchart TD`, `flowchart LR`
-/// - Node shapes: `A[text]` rect, `A(text)` rounded, `A{text}` diamond, `A((text))` circle
+/// - Node shapes: `A[text]` rect, `A(text)` rounded, `A{text}` diamond, `A((text))` circle, `A[(text)]` database/cylinder (mapped to rectangle)
 /// - Bare node refs: `A` → rectangle with id as label
 /// - Edges: `-->`, `---`, `-.->`, `-.-`, `==>`, with optional labels
 /// - Comments (`%%`), semicolons as separators
@@ -366,7 +366,7 @@ fn find_edge_op(s: &str, op: &str) -> Option<usize> {
 
 // ─── Node declaration parsing ────────────────────────────────────────────────
 
-/// Parse a node token like `A`, `A[Label]`, `A(Label)`, `A{Label}`, `A((Label))`.
+/// Parse a node token like `A`, `A[Label]`, `A(Label)`, `A{Label}`, `A((Label))`, `A[(Label)]`.
 fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
     let s = s.trim();
     if s.is_empty() {
@@ -383,6 +383,20 @@ fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
             .ok_or_else(|| format!("unclosed '((' in node '{s}'"))?;
         let label = rest[..close].to_string();
         return Ok((id.to_string(), NodeShape::Circle, label));
+    }
+
+    // Database/cylinder: `ID[(label)]` (rendered as rectangle for now).
+    // This must be checked before rounded rect, because the first `(` belongs
+    // to the shape delimiter and the id is before `[`.
+    if let Some(open) = s.find("[(") {
+        let id = &s[..open];
+        validate_id(id)?;
+        let rest = &s[open + 2..];
+        let close = rest
+            .rfind(")]")
+            .ok_or_else(|| format!("unclosed '[(' in node '{s}'"))?;
+        let label = rest[..close].to_string();
+        return Ok((id.to_string(), NodeShape::Rectangle, label));
     }
 
     // Rounded rect: `ID(label)`

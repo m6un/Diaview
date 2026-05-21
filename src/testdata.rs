@@ -164,6 +164,18 @@ flowchart TD
     STORE -.-> VALIDATE
 "#;
 
+    /// Small Temporal/Stripe payment orchestration graph with cyclic return paths.
+    pub const TEMPORAL_STRIPE_PAYMENT_MERMAID: &str = r#"
+flowchart TD
+    CLIENT[Client] -->|POST /payments| API[Payments API]
+    API -->|start payment workflow| WORKFLOW[Temporal Workflow]
+    WORKFLOW -->|create PaymentIntent| STRIPE[Stripe API]
+    WORKFLOW -->|persist state| DB[Payment DB]
+    STRIPE -.->|payment_succeeded| WEBHOOK[Stripe Webhook Handler]
+    WEBHOOK -->|signal workflow| WORKFLOW
+    WORKFLOW -->|final status| API
+"#;
+
     /// Primary request path overlaid with dashed telemetry edges into shared observability sinks.
     pub const PHASE15_TELEMETRY_OVERLAY_MERMAID: &str = r#"
 flowchart LR
@@ -226,6 +238,10 @@ flowchart TD
 
     pub fn phase15_back_edge_cycle_mermaid() -> &'static str {
         PHASE15_BACK_EDGE_CYCLE_MERMAID
+    }
+
+    pub fn temporal_stripe_payment_mermaid() -> &'static str {
+        TEMPORAL_STRIPE_PAYMENT_MERMAID
     }
 
     pub fn phase15_telemetry_overlay_mermaid() -> &'static str {

@@ -14,6 +14,7 @@ Current parser focus:
 - rounded nodes: `A(text)`
 - diamond nodes: `A{text}`
 - circle nodes: `A((text))`
+- database/cylinder nodes: `A[(text)]` (currently normalized to rectangle rendering)
 - solid arrows: `-->`
 - solid links without arrows: `---`
 - dashed arrows: `-.->`

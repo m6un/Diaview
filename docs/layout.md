@@ -15,6 +15,8 @@ It includes:
 - barycenter-style crossing reduction
 - aspect-ratio-aware node sizing
 - dummy nodes for long-edge routing
+- route metadata with edge classes, port sides, and lane ids
+- outer perimeter lanes for detected back-edges/cyclic return paths
 - spacing tuned for terminal cell geometry
 
 ## Why own layout for now?
@@ -34,7 +36,7 @@ The current layout works well for tree-shaped, pipeline-shaped, and moderately b
 It struggles with dense real architecture diagrams:
 
 - shared observability sinks create routing walls
-- cycles/back-edges break the forward-flow assumption
+- dense or nested cycles can still stress the forward-flow assumption
 - dense fan-in/fan-out creates spaghetti
 - edge labels collide in crowded branches
 - telemetry/error paths visually overwhelm primary flows

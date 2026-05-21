@@ -700,7 +700,13 @@ fn assign_route_plans(graph: &mut Graph) {
         let target_port = make_port(tgt, target_side, target_offsets[idx]);
         let class = &classes[idx];
         let bundle = bundle_for_edge(edge, &bundles);
-        let (lane_id, points) = if let Some(bundle) = bundle {
+        let (lane_id, points) = if *class == EdgeClass::BackEdge {
+            let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
+            (
+                Some(lane.id),
+                perimeter_points(&graph.direction, &source_port, &target_port, lane.coord),
+            )
+        } else if let Some(bundle) = bundle {
             let lane_id = lane_allocator.bundle_lane(bundle.key.clone());
             let trunk_coord =
                 bundle_trunk_coordinate(&graph.direction, bundle.kind, &source_port, &target_port);
@@ -714,12 +720,7 @@ fn assign_route_plans(graph: &mut Graph) {
             let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
             (
                 Some(lane.id),
-                telemetry_perimeter_points(
-                    &graph.direction,
-                    &source_port,
-                    &target_port,
-                    lane.coord,
-                ),
+                perimeter_points(&graph.direction, &source_port, &target_port, lane.coord),
             )
         } else {
             let lane = lane_allocator.reserve_between(&graph.direction, &source_port, &target_port);
@@ -728,7 +729,7 @@ fn assign_route_plans(graph: &mut Graph) {
                 orthogonal_points(&graph.direction, &source_port, &target_port, lane.coord),
             )
         };
-        let label_anchor = route_midpoint(&points);
+        let label_anchor = route_label_anchor(edge.label.as_deref(), &points);
 
         edge.route = Some(RoutePlan {
             points,
@@ -832,8 +833,8 @@ impl LaneAllocator {
     ) -> ReservedLane {
         let rank = self.perimeter_counts.entry(direction.clone()).or_insert(0);
         let coord = match direction {
-            Direction::TopDown => perimeter.max_x + 3.0 + *rank as f64,
-            Direction::LeftRight => perimeter.max_y + 2.0 + *rank as f64,
+            Direction::TopDown => perimeter.max_x + SPACING_H + *rank as f64,
+            Direction::LeftRight => perimeter.max_y + SPACING_V + *rank as f64,
         };
         *rank += 1;
         let id = self.alloc_id();
@@ -1128,36 +1129,14 @@ fn target_side(
 }
 
 fn back_edge_side(
-    edge: &Edge,
-    nodes: &HashMap<String, Node>,
-    is_source: bool,
+    _edge: &Edge,
+    _nodes: &HashMap<String, Node>,
+    _is_source: bool,
     direction: &Direction,
 ) -> PortSide {
-    let (Some(src), Some(tgt)) = (nodes.get(&edge.source), nodes.get(&edge.target)) else {
-        return match direction {
-            Direction::TopDown => PortSide::Left,
-            Direction::LeftRight => PortSide::Top,
-        };
-    };
     match direction {
-        Direction::TopDown => {
-            let src_x = src.x.unwrap_or(0.0);
-            let tgt_x = tgt.x.unwrap_or(0.0);
-            if (is_source && tgt_x >= src_x) || (!is_source && src_x < tgt_x) {
-                PortSide::Right
-            } else {
-                PortSide::Left
-            }
-        }
-        Direction::LeftRight => {
-            let src_y = src.y.unwrap_or(0.0);
-            let tgt_y = tgt.y.unwrap_or(0.0);
-            if (is_source && tgt_y >= src_y) || (!is_source && src_y < tgt_y) {
-                PortSide::Bottom
-            } else {
-                PortSide::Top
-            }
-        }
+        Direction::TopDown => PortSide::Right,
+        Direction::LeftRight => PortSide::Bottom,
     }
 }
 
@@ -1234,7 +1213,7 @@ fn orthogonal_points(
     points
 }
 
-fn telemetry_perimeter_points(
+fn perimeter_points(
     direction: &Direction,
     source_port: &Port,
     target_port: &Port,
@@ -1276,6 +1255,41 @@ fn telemetry_perimeter_points(
     points
 }
 
-fn route_midpoint(points: &[RoutePoint]) -> Option<RoutePoint> {
-    points.get(points.len() / 2).cloned()
+fn route_label_anchor(label: Option<&str>, points: &[RoutePoint]) -> Option<RoutePoint> {
+    let first = points.first()?;
+    if points.len() == 1 {
+        return Some(first.clone());
+    }
+
+    let mut best_anchor = first.clone();
+    let mut best_len = -1.0_f64;
+    let mut best_is_vertical = false;
+    for segment in points.windows(2) {
+        let a = &segment[0];
+        let b = &segment[1];
+        let dx = (a.x - b.x).abs();
+        let dy = (a.y - b.y).abs();
+        let len = dx + dy;
+        if len > best_len {
+            best_len = len;
+            best_is_vertical = dy > dx;
+            best_anchor = RoutePoint {
+                x: (a.x + b.x) / 2.0,
+                y: (a.y + b.y) / 2.0,
+            };
+        }
+    }
+
+    // The renderer places labels by centering them horizontally on the anchor and
+    // drawing one row above it. For vertical route segments, shift the anchor so
+    // the rendered label sits beside the line in the open gap instead of on top
+    // of the line or card shadow.
+    if best_is_vertical {
+        if let Some(label) = label {
+            best_anchor.x += 1.0 + label.chars().count() as f64 / 2.0;
+            best_anchor.y += 1.0;
+        }
+    }
+
+    Some(best_anchor)
 }

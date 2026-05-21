@@ -1,11 +1,15 @@
 use diaview::model::*;
 use diaview::testdata::fixtures;
 
-fn phase15_fixtures() -> [(&'static str, fn() -> &'static str); 5] {
+fn phase15_fixtures() -> [(&'static str, fn() -> &'static str); 6] {
     [
         ("fan-in sink", fixtures::phase15_fan_in_sink_mermaid),
         ("fan-out router", fixtures::phase15_fan_out_router_mermaid),
         ("back-edge cycle", fixtures::phase15_back_edge_cycle_mermaid),
+        (
+            "temporal stripe payment",
+            fixtures::temporal_stripe_payment_mermaid,
+        ),
         (
             "telemetry overlay",
             fixtures::phase15_telemetry_overlay_mermaid,
@@ -66,6 +70,29 @@ fn graph_bounds(graph: &Graph) -> (f64, f64) {
     })
 }
 
+fn full_graph_bounds(graph: &Graph) -> (f64, f64, f64, f64) {
+    graph.nodes.iter().fold(
+        (
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
+        ),
+        |(min_x, min_y, max_x, max_y), node| {
+            let x = node.x.unwrap_or(0.0);
+            let y = node.y.unwrap_or(0.0);
+            let right = x + node.width.unwrap_or(0.0);
+            let bottom = y + node.height.unwrap_or(0.0);
+            (
+                min_x.min(x),
+                min_y.min(y),
+                max_x.max(right),
+                max_y.max(bottom),
+            )
+        },
+    )
+}
+
 fn parse_and_layout_phase15_fixture(name: &str, mermaid: &str) -> Graph {
     let mut graph = diaview::parser::mermaid::parse(mermaid)
         .unwrap_or_else(|err| panic!("{name} fixture failed to parse: {err}"));
@@ -108,6 +135,70 @@ fn phase15_diagnostic_fixtures_parse_layout_without_node_overlaps() {
 
         assert_all_positioned(&graph);
         assert_no_node_rectangle_overlaps(&graph);
+    }
+}
+
+#[test]
+fn temporal_stripe_payment_fixture_classifies_return_edges_as_back_edges() {
+    let graph = parse_and_layout_phase15_fixture(
+        "temporal stripe payment",
+        fixtures::temporal_stripe_payment_mermaid(),
+    );
+    let (min_x, min_y, max_x, max_y) = full_graph_bounds(&graph);
+
+    for (source, target) in [("WEBHOOK", "WORKFLOW"), ("WORKFLOW", "API")] {
+        let edge = graph
+            .edges
+            .iter()
+            .find(|edge| edge.source == source && edge.target == target)
+            .unwrap_or_else(|| panic!("missing edge {source} -> {target}"));
+        let route = edge
+            .route
+            .as_ref()
+            .unwrap_or_else(|| panic!("missing route for edge {source} -> {target}"));
+
+        assert_eq!(
+            route.class,
+            EdgeClass::BackEdge,
+            "edge {source} -> {target}"
+        );
+        assert!(
+            route.points.iter().any(|point| {
+                point.x < min_x || point.x > max_x || point.y < min_y || point.y > max_y
+            }),
+            "back-edge route {source} -> {target} should leave graph bounds; bounds=({min_x},{min_y})-({max_x},{max_y}), points={:?}",
+            route.points
+        );
+    }
+}
+
+#[test]
+fn temporal_stripe_payment_fixture_renders_all_labels() {
+    let graph = parse_and_layout_phase15_fixture(
+        "temporal stripe payment",
+        fixtures::temporal_stripe_payment_mermaid(),
+    );
+    let rendered = diaview::renderer::canvas::render_to_string(&graph).unwrap();
+
+    for label in [
+        "Client",
+        "Payments API",
+        "Temporal Workflow",
+        "Stripe API",
+        "Payment DB",
+        "Stripe Webhook Handler",
+        "POST /payments",
+        "start payment workflow",
+        "create PaymentIntent",
+        "persist state",
+        "payment_succeeded",
+        "signal workflow",
+        "final status",
+    ] {
+        assert!(
+            rendered.contains(label),
+            "rendered output missing {label:?}\n{rendered}"
+        );
     }
 }
 
