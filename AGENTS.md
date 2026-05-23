@@ -32,7 +32,8 @@ Mermaid input → parser → Graph IR → layout → Ratatui renderer → termin
 - `src/lib.rs` — library exports for testing and integration
 - `src/model.rs` — pure data model: `Graph`, `Node`, `Edge`, and enums
 - `src/parser/mermaid.rs` — Mermaid flowchart parser
-- `src/layout.rs` — assigns positions/sizes and inserts dummy nodes for long-edge routing
+- `src/layout.rs` — layout abstraction and public entry points
+- `src/layout/simple.rs` — native layout engine, route planning, group bounds, and dummy nodes
 - `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, edge routing, tests
 - `src/theme.rs` — static Ayu Dark-inspired terminal theme
 - `src/testdata.rs` — reusable graph and Mermaid fixtures

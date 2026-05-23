@@ -38,7 +38,7 @@ pub trait LayoutEngine {
 
 Current implementation:
 
-- `SimpleLayoutEngine` — native layered layout with route planning
+- `SimpleLayoutEngine` — native layered layout with route planning, implemented in `src/layout/simple.rs`
 
 Public entry points:
 

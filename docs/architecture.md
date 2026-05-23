@@ -85,7 +85,8 @@ The long-term Visual REPL loop uses structured JSON IPC so a selected node plus 
 - `src/lib.rs` — library exports for testing and integration
 - `src/model.rs` — graph data model, route metadata, and group metadata
 - `src/parser/mermaid.rs` — Mermaid flowchart parser
-- `src/layout.rs` — layout engine, group bounds, edge classification, route planning
+- `src/layout.rs` — layout abstraction and public layout entry points
+- `src/layout/simple.rs` — default native layout engine, group bounds, edge classification, route planning
 - `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, routed edge drawing
 - `src/theme.rs` — static Ayu Dark-inspired terminal theme
 - `src/testdata.rs` — reusable graph and Mermaid fixtures

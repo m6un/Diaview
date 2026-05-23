@@ -6,7 +6,8 @@ Goal: make 30–60 node architecture diagrams readable without replacing the own
 
 ## Implemented baseline
 
-- `src/layout.rs` sizes nodes, assigns layers, inserts dummy nodes for long edges, orders layers, writes node coordinates, computes group bounds, and computes route plans.
+- `src/layout.rs` exposes the layout abstraction and public entry points.
+- `src/layout/simple.rs` sizes nodes, assigns layers, inserts dummy nodes for long edges, orders layers, writes node coordinates, computes group bounds, and computes route plans.
 - `src/model.rs` includes route metadata (`RoutePlan`, ports, lane ids, edge class, label anchor) and subgraph group metadata.
 - `src/renderer/canvas.rs` consumes route metadata when present and falls back to local routing when absent.
 - The layout pass classifies primary, telemetry, error, back-edge, and external edges.
