@@ -4,7 +4,23 @@ Diaview's long-term goal is to become a Visual REPL for human + AI architecture 
 
 Instead of only editing Mermaid text, a user should be able to select a node, type an instruction, and feed structured graph context back to an agent.
 
+## Current integration surface
+
+
+- `diaview --inline` renders Mermaid diagrams as ANSI terminal output without alternate screen/raw mode.
+- The parser/layout/renderer pipeline can be called from the library for tests or future integrations.
+- Route metadata, groups, and edge classes are present in the Graph IR after layout, so future tools can inspect more than just nodes and edges.
+
+Not implemented yet:
+
+- interactive selection
+- action bar
+- JSON IPC output
+- Pi extension/tool wrapper
+
 ## Visual REPL loop
+
+Planned loop:
 
 1. Agent produces Mermaid.
 2. Diaview renders the diagram.
@@ -31,6 +47,14 @@ Planned output shape:
 }
 ```
 
+Potential future additions:
+
+- selected edge/group context
+- visible viewport bounds
+- route/edge class summaries
+- neighboring nodes and incident edges
+- full graph text and/or normalized graph JSON
+
 ## Pi integration plan
 
 A future Pi extension can expose a tool such as:
@@ -50,17 +74,20 @@ Expected behavior:
 
 ## Inline chat rendering
 
-A separate integration path is inline rendering:
+Inline rendering is the nearer-term integration path:
 
 - detect Mermaid code blocks in agent output
 - pipe them through `diaview --inline`
 - render ANSI diagrams directly in chat scrollback
 - fall back to raw Mermaid if Diaview is unavailable
 
+The CLI side is already implemented. The remaining work is Pi/chat integration and fallback behavior.
+
 ## Design constraints
 
-- stdout JSON should be machine-readable and stable.
+- stdout JSON should be machine-readable and stable in interactive IPC mode.
 - human UI logs should not corrupt JSON IPC output.
 - selected-node context should be sufficient for an agent to make localized edits.
 - the full current graph should be available when broader edits are needed.
 - exiting without an action should be distinguishable from submitting an action.
+- inline ANSI rendering and JSON IPC should remain separate modes so chat output cannot accidentally corrupt structured IPC.

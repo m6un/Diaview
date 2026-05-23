@@ -8,21 +8,24 @@ The renderer should produce diagrams that feel native in Ghostty, tmux, neovim, 
 
 - Ratatui for buffer/widget rendering
 - Crossterm for terminal integration
-- Unicode box drawing for structure
+- Unicode box/line drawing for structure
 - 24-bit color where available
+- Ratatui `TestBackend` for non-interactive tests and inline rendering
 
 ## Aesthetic direction
 
-Recent visual polish moved the renderer toward:
+Current visual direction:
 
 - 24-bit truecolor fills
 - soft Ayu Dark-inspired colors
-- borderless filled cards where appropriate
+- borderless filled cards
 - semantic icons for non-rectangular shapes, e.g. `◆`, `●`
-- soft shadows
+- subtle one-cell shadows
 - muted orthogonal edges
+- distinct edge colors for telemetry/error/back-edge/external classes
 - visible arrowheads
 - clean junction glyphs
+- group boxes drawn behind nodes
 
 ## Node rendering
 
@@ -30,12 +33,20 @@ Current node rendering maps model shape to terminal treatment:
 
 | Shape | Treatment |
 |-------|-----------|
-| Rectangle | plain card/box |
-| Rounded rectangle | rounded card/box |
-| Diamond | decision styling, often with semantic icon |
-| Circle | rounded/circular semantic treatment |
+| Rectangle | filled card |
+| Rounded rectangle | filled card with rounded semantic treatment where applicable |
+| Diamond | decision styling with `◆` icon |
+| Circle | circular semantic treatment with `●` icon |
+
+Mermaid database/cylinder syntax is currently normalized to `Rectangle`; there is no dedicated database card treatment yet.
 
 Exact glyph choices may evolve, but readability and terminal compatibility matter more than literal geometric perfection.
+
+## Group rendering
+
+Mermaid `subgraph` blocks become `Graph.groups`.
+
+Layout computes group bounds after member nodes are positioned. Renderer draws muted cluster boxes behind nodes and edges so grouped architecture sections remain visible without overpowering the primary flow.
 
 ## Edge rendering
 
@@ -43,18 +54,30 @@ Edges should be readable on a fixed-width character grid.
 
 Renderer responsibilities include:
 
-- orthogonal line drawing
-- corner and junction glyphs
-- arrowhead placement
-- dashed/solid distinction
-- edge label placement
+- consuming layout-owned `RoutePlan`s when available
+- falling back to local routing only when an edge has no route metadata
+- converting route segments to box/line glyphs
+- merging solid edge junctions where routes share cells
+- placing arrowheads at target ports
+- drawing dashed/dotted distinctions
+- drawing labels at route-provided label anchors
 - avoiding node interiors
 
-Long-term, global lane reservation and better routing should move into layout/routing so the renderer is not forced to make purely local decisions.
+Layout owns route decisions such as ports, lanes, edge class, perimeter routes, and label anchors. Renderer should not reintroduce global routing policy.
 
 ## Inline rendering
 
-Inline rendering should emit ANSI output without taking over the terminal.
+Inline rendering is implemented.
+
+`--inline` renders to an in-memory Ratatui backend and emits ANSI output directly to stdout without alternate screen or raw mode.
+
+Useful commands:
+
+```bash
+cargo run -- --inline
+cargo run -- --inline fixtures/simple.mmd
+cargo run -- --inline fixtures/complex_architecture.mmd
+```
 
 Goals:
 
@@ -66,7 +89,7 @@ Goals:
 
 ## Testing guidance
 
-Renderer tests should use Ratatui `TestBackend` or `render_to_string`-style helpers.
+Renderer tests live in `tests/renderer_canvas.rs` and should use Ratatui `TestBackend` or `render_to_string`-style helpers.
 
 Avoid tests that require:
 
@@ -79,6 +102,7 @@ Useful inspection commands:
 
 ```bash
 cargo run -- --inline
-cargo test renderer::canvas::tests::dump_default_graph -- --nocapture
-cargo test renderer::canvas::tests::dump_complex_architecture_graph -- --nocapture
+cargo test --test renderer_canvas dump_default_graph -- --nocapture
+cargo test --test renderer_canvas dump_complex_architecture_graph -- --nocapture
+cargo test --test testdata_fixtures dump_phase15_diagnostic_fixture_metrics -- --nocapture
 ```

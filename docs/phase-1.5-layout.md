@@ -1,110 +1,103 @@
 # Phase 1.5 Layout/Routing
 
-Status: complete baseline.
+Status: complete baseline, with follow-up fixes for cyclic payment workflows.
 
 Goal: make 30–60 node architecture diagrams readable without replacing the owned Rust layout pipeline or changing the Mermaid-first model. The implemented baseline keeps the static renderer intact while moving routing decisions out of per-edge drawing and into layout-owned metadata.
 
 ## Implemented baseline
 
-- `src/layout.rs` sizes nodes, assigns layers, inserts dummy nodes for long edges, orders layers, writes node coordinates, and computes route plans.
+- `src/layout.rs` sizes nodes, assigns layers, inserts dummy nodes for long edges, orders layers, writes node coordinates, computes group bounds, and computes route plans.
 - `src/model.rs` includes route metadata (`RoutePlan`, ports, lane ids, edge class, label anchor) and subgraph group metadata.
 - `src/renderer/canvas.rs` consumes route metadata when present and falls back to local routing when absent.
 - The layout pass classifies primary, telemetry, error, back-edge, and external edges.
 - High-degree/shared semantic endpoints are bundled into bus-like trunks/spokes.
-- Telemetry routes prefer perimeter lanes and render dimmer than primary flow.
+- Telemetry routes can use perimeter lanes and render dimmer than primary flow.
+- Error/back-edge/external edges have distinct route classes and rendering colors.
 - Mermaid `subgraph` blocks parse into groups with computed bounds and muted terminal cluster rendering.
+- Cyclic return edges in payment/workflow diagrams route around the outer perimeter instead of cutting through the primary flow.
+- Mermaid database/cylinder syntax `A[(label)]` parses and is normalized to rectangle rendering for now.
 
-## Implementation record
+## Current implementation notes
 
-### 1. Stabilize layout diagnostics first
+### Route metadata
 
-Deliverables:
-- Add reusable stress fixtures for fan-in sinks, fan-out routers, back-edges, telemetry overlays, and subgraph-like grouped diagrams.
-- Add text/metric assertions before aesthetic assertions: crossings, node overlaps, edge-node collisions, label collisions, lane reuse, route length, and rendered bounds.
-- Add a debug dump for route metadata so failures are inspectable without opening a terminal.
+Every routed edge can receive:
 
-Definition of done:
-- Current behavior is captured by failing or ignored tests that describe the Phase 1.5 target.
-- Every later routing change has a fixture proving it improves one metric without regressing basic diagrams.
+- route points
+- source/target port
+- lane id
+- edge class
+- label anchor
 
-### 2. Move routing planning into layout
+Renderer uses this metadata to draw glyphs. This is the key architectural shift from local renderer-chosen midpoints to layout-owned routing.
 
-Deliverables:
-- Introduce internal `RoutePlan` data computed after node coordinates: ordered points, source/target port, lane id, edge class, and label anchor.
-- Keep renderer responsible for glyph painting only; renderer should consume route points instead of choosing midpoints per edge.
-- Preserve compatibility by falling back to local routing when no route plan exists.
+### Back-edges and cyclic return paths
 
-Definition of done:
-- Simple TD/LR diagrams render the same or better.
-- Route metadata can be tested independently from Ratatui buffers.
+Back-edges are detected after node coordinates are assigned by comparing the main-axis position of source and target. For example:
 
-### 3. Port assignment per node side
+- in top-down diagrams, a target above the source is a back-edge
+- in left-right diagrams, a target left of the source is a back-edge
 
-Deliverables:
-- Compute candidate ports on each side of each node after sizing: top/bottom for TD, left/right for LR, with side ports allowed for back-edges and dummy-routed long edges.
-- Assign ports by sorted edge order and direction: outgoing primary edges near the flow axis center, fan-out distributed across the side, incoming fan-in distributed to avoid one-cell walls.
-- Reserve distinct ports for edge classes where useful: primary, back-edge, telemetry, error/secondary.
+Current behavior routes back-edges through outer perimeter lanes. In top-down diagrams, back-edge ports use the right side. In left-right diagrams, they use the bottom side.
 
-Definition of done:
-- Multiple edges from/to the same node do not all share one cell unless intentionally bundled.
-- Back-edges enter side or reverse-flow ports and are visually distinguishable from forward flow.
+The Temporal/Stripe payment fixture validates return paths such as webhook callbacks and workflow-to-API final status updates.
 
-### 4. Global edge lane reservation
+### Telemetry and secondary edges
 
-Deliverables:
-- Build an occupancy grid over layout cells after nodes are placed.
-- Reserve node rectangles plus padding as hard obstacles; reserve labels and group borders as soft obstacles.
-- Route edges in priority order with a cost function: avoid nodes, avoid labels, minimize crossings, prefer existing bundle trunks when compatible, penalize long detours.
-- Assign horizontal/vertical lanes between layers globally rather than using per-edge midpoints.
+Telemetry-like labels/endpoints are classified separately from primary flow. Dense telemetry routes can prefer perimeter/bundled lanes and render with muted styling. Classification order matters: error and back-edge classification should take precedence over telemetry where applicable.
 
-Definition of done:
-- Fan-in/fan-out diagrams use parallel lanes or intentional shared trunks instead of overwriting each other.
-- Edge-node collisions and label collisions are measurable and near zero in stress fixtures.
+### Bundling
 
-### 5. Shared sink/source bundling
+High-degree shared sinks/sources and semantic bus endpoints such as logs, metrics, alerts, events, queue, and bus-like nodes can share trunk-like route structure instead of producing independent edge walls.
 
-Deliverables:
-- Detect high-degree shared sinks/sources (`in_degree`/`out_degree` threshold, initially 4+) and semantic names such as logs, metrics, alerts, events, queue, bus.
-- Create bus trunks before the sink/source and short terminal spokes to individual nodes.
-- Reuse one reserved lane per compatible bundle, with junction glyphs for solid primary buses and lighter glyphs for telemetry buses.
-- Keep labels on spokes or bundle summaries; avoid repeating identical labels along a trunk.
+### Groups
 
-Definition of done:
-- Observability sinks and common completion nodes no longer create edge walls.
-- The primary request path remains readable when a shared sink has many incoming edges.
+Mermaid `subgraph` blocks are parsed into `Graph.groups`. Layout computes bounds around member nodes and renderer draws muted cluster boxes behind nodes.
 
-### 6. Telemetry and secondary-edge treatment
+## Implemented sequence
 
-Deliverables:
-- Add an edge classification pass using style, label, and endpoint names: `primary`, `telemetry`, `error`, `back_edge`, `external`.
-- Route primary edges first and give them the best lanes.
-- Route telemetry after primary edges, prefer perimeter lanes or bundles, dim/dash them, and allow future hide/collapse modes.
-- Treat dense telemetry to common sinks as summarized bundles when edge count exceeds a threshold.
+1. Added diagnostics and complex/stress fixtures.
+2. Added route metadata skeleton and renderer fallback.
+3. Assigned ports for existing TD/LR layouts.
+4. Added lane reservation for routed edges.
+5. Added shared sink/source bundling.
+6. Added telemetry classification and perimeter/bundle routing.
+7. Added Mermaid subgraph parsing, Graph IR groups, and group rendering.
+8. Added dashed/dotted routed bend rendering fixes.
+9. Added endpoint stubs so arrows visibly connect to node ports.
+10. Added cyclic payment/workflow routing fixes and parser support for database/cylinder syntax.
 
-Definition of done:
-- Dotted/dashed monitoring edges do not cross through the middle of primary service flow unless no perimeter path exists.
-- There is a documented path to `--hide-telemetry` or interactive toggles without changing parser syntax.
+## Important fixtures/tests
 
-### 7. Subgraph and swimlane support
+- `fixtures/simple.mmd`
+- `fixtures/complex_architecture.mmd`
+- `fixtures::phase15_fan_in_sink_mermaid()`
+- `fixtures::phase15_fan_out_router_mermaid()`
+- `fixtures::phase15_back_edge_cycle_mermaid()`
+- `fixtures::phase15_telemetry_overlay_mermaid()`
+- `fixtures::phase15_grouped_architecture_mermaid()`
+- `fixtures::temporal_stripe_payment_mermaid()`
 
-Deliverables:
-- Parse Mermaid `subgraph` blocks into stable group metadata while preserving node order and labels.
-- Extend the Graph IR with groups/clusters: id, label, member node ids, optional parent group, and layout bounds.
-- Lay groups out as swimlanes for architecture diagrams: group-local ordering first, then global layer alignment across groups.
-- Render group bounds behind nodes and route cross-group edges through group boundary ports.
+Useful commands:
 
-Definition of done:
-- A Mermaid diagram organized as Client / Edge / API / Services / Data / Observability / External renders as clear lanes or boxed clusters.
-- Related nodes remain spatially local, and cross-group edges are fewer and more predictable.
+```bash
+cargo test --test layout
+cargo test --test testdata_fixtures
+cargo test --test testdata_fixtures dump_phase15_diagnostic_fixture_metrics -- --nocapture
+cargo run -- --inline fixtures/complex_architecture.mmd
+```
 
-## Suggested implementation order
+## Remaining limitations
 
-1. Diagnostics and fixtures.
-2. Route metadata skeleton and renderer fallback.
-3. Port assignment for existing TD/LR layouts.
-4. Global lane reservation for primary solid edges.
-5. Shared sink/source bundling.
-6. Telemetry classification and perimeter/bundle routing.
-7. Mermaid subgraph parsing, Graph IR groups, and swimlane rendering.
+This is a baseline, not a complete graph drawing engine.
 
-Each step should land with tests and keep `cargo test` non-interactive. Avoid introducing Graphviz/dagre; this phase is about improving the owned layout/routing pipeline incrementally.
+Known remaining limits:
+
+- no full obstacle-routing/A* grid yet
+- no interactive hide/collapse toggles for telemetry or bundles
+- dense labels can still crowd route bands
+- group layout is bounds rendering, not full swimlane-aware ranking
+- database/cylinder nodes do not yet have dedicated shape/rendering
+- complex cyclic graphs beyond payment-style callbacks may still need stronger normalization
+
+Each improvement should land with tests and keep `cargo test` non-interactive. Avoid introducing Graphviz/dagre; this phase is about improving the owned layout/routing pipeline incrementally.

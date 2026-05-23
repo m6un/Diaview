@@ -10,6 +10,17 @@ Phase 2 turns Diaview from a static renderer into a navigable interactive TUI.
 - pan large diagrams
 - later issue actions against selected nodes
 
+## Current baseline
+
+Current renderer behavior is still render-once:
+
+- fullscreen mode enters alternate screen, renders, then waits for `q`/`Esc`
+- inline mode prints ANSI output to scrollback and exits
+
+There is no persistent app state or selection state yet.
+
+The graph produced after layout already has node coordinates, group bounds, and edge route metadata, which should make Phase 2 navigation and hit-testing easier.
+
 ## App state
 
 Expected state includes:
@@ -31,15 +42,21 @@ struct AppState {
 }
 ```
 
+Keep state transitions testable outside the terminal event loop.
+
 ## Selection
 
 Planned selection behavior:
 
-- `Tab` cycles forward through nodes
+- `Tab` cycles forward through visible/selectable nodes
 - `Shift+Tab` cycles backward
 - arrow keys / `hjkl` move spatially to the nearest node in that direction
 - mouse click selects a node directly
 - selected node gets a strong visual highlight
+
+Dummy routing nodes should not be selectable.
+
+Future selection may include groups and edges, but node selection should land first.
 
 ## Event loop
 
@@ -53,6 +70,8 @@ Expected behavior:
 - redraw
 - exit on `q` or configured quit command
 
+Terminal IO should remain thin. Pure functions should handle selection, navigation, viewport updates, and mode transitions.
+
 ## Status bar
 
 A bottom status bar should show useful context such as:
@@ -60,6 +79,8 @@ A bottom status bar should show useful context such as:
 - selected node id
 - selected node label
 - shape/type
+- incident edge count or edge classes
+- group membership if present
 - available keybindings
 - current mode
 
@@ -83,5 +104,7 @@ Good tests:
 - spatial navigation target choice
 - viewport offset updates
 - command mode transitions
+- dummy nodes are skipped
+- selected node remains visible after navigation/pan updates
 
 Thin terminal event-loop code can remain lightly tested, but state transitions should be covered.
