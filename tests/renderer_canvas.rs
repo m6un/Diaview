@@ -143,7 +143,6 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
     (max_x.ceil() as u16, max_y.ceil() as u16)
 }
 
-/// Helper to build a graph with laid-out nodes.
 fn test_graph() -> Graph {
     Graph {
         direction: Direction::TopDown,
@@ -209,7 +208,6 @@ fn test_rounded_rect_renders_as_borderless_card() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Rounded nodes are now filled cards with no outline glyphs.
     assert_eq!(buf[(5, 1)].symbol(), " ");
     assert_eq!(buf[(5, 1)].bg, theme.rounded_rect.fill);
     assert_eq!(buf[(15, 3)].symbol(), " ");
@@ -240,7 +238,6 @@ fn test_rectangle_renders_as_borderless_card() {
     let buf = terminal.backend().buffer();
 
     let theme = Theme::default();
-    // Rectangles are filled cards with no outline glyphs.
     assert_eq!(buf[(2, 1)].symbol(), " ");
     assert_eq!(buf[(2, 1)].bg, theme.rectangle.fill);
     assert_eq!(buf[(10, 3)].symbol(), " ");
@@ -258,13 +255,9 @@ fn test_node_fill_stays_inside_node_bounds() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Interior cells inherit the node card fill.
     assert_eq!(buf[(6, 2)].bg, theme.rounded_rect.fill);
-    // Border cells also carry the fill so there is no black gap between
-    // the border glyph and the card background.
     assert_eq!(buf[(5, 1)].bg, theme.rounded_rect.fill);
     assert_eq!(buf[(5, 2)].bg, theme.rounded_rect.fill);
-    // Shadows are thin glyphs, not full background cells.
     assert_eq!(buf[(16, 1)].bg, Color::Reset);
     assert_eq!(buf[(16, 2)].symbol(), "▏");
     assert_eq!(buf[(16, 2)].fg, theme.shadow);
@@ -285,7 +278,6 @@ fn test_edge_label_is_text_only() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // The label text stays unchanged and intentionally has no background pill.
     let rendered: String = (11..15).map(|x| buf[(x, 5)].symbol().to_string()).collect();
     assert_eq!(rendered, "next");
     for x in 11..15 {
@@ -624,9 +616,6 @@ fn test_node_label_present() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Node A label "Start" should appear inside the node (y=2 is the middle row, inner area)
-    // Inner area: x=6..15, y=2
-    // "Start" is 5 chars, inner width=9, so centered at x = 6 + (9-5)/2 = 8
     let rendered: String = (6..15).map(|x| buf[(x, 2)].symbol().to_string()).collect();
     assert!(
         rendered.contains("Start"),
@@ -644,7 +633,6 @@ fn test_node_b_label_present() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Node B at y=8, inner row at y=9
     let rendered: String = (6..15).map(|x| buf[(x, 9)].symbol().to_string()).collect();
     assert!(
         rendered.contains("End"),
@@ -662,10 +650,6 @@ fn test_edge_vertical_line() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Edge goes from node A bottom (y=3) to node B top (y=8)
-    // Center x = 5 + 11/2 = 10
-    // The vertical line should be somewhere between y=3 and y=8 at x=10
-    // Check a midpoint
     let mid_y = 5;
     let sym = buf[(10, mid_y)].symbol();
     assert!(
@@ -684,7 +668,6 @@ fn test_arrowhead_present() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Arrow should be one cell above node B top border: (10, 7)
     let sym = buf[(10, 7)].symbol();
     assert_eq!(
         sym, "▼",
@@ -702,8 +685,6 @@ fn test_edge_label_rendered() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Edge label "next" should appear near the midpoint of the edge
-    // midpoint y = (3+8)/2 = 5, x = 10, label starts at x=11
     let rendered: String = (11..15).map(|x| buf[(x, 5)].symbol().to_string()).collect();
     assert_eq!(
         rendered, "next",
@@ -752,7 +733,6 @@ fn test_dashed_edge() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Midpoint of edge: x=5, y=4
     let sym = buf[(5, 4)].symbol();
     assert_eq!(sym, "╎", "Dashed edge should use ╎, got: '{sym}'");
 }
@@ -798,7 +778,6 @@ fn test_no_arrowhead_when_none() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Target top at (5, 7) should NOT have an arrowhead
     let sym = buf[(5, 7)].symbol();
     assert_ne!(sym, "▼", "No arrowhead expected when Arrowhead::None");
 }
@@ -826,8 +805,6 @@ fn test_diamond_label() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Diamond renders as a clean semantic card; the ◆ icon carries the
-    // decision semantics instead of a geometric outline.
     assert_eq!(buf[(3, 1)].symbol(), " ");
     assert_eq!(buf[(3, 1)].bg, Theme::default().diamond.fill);
     assert_eq!(buf[(13, 5)].symbol(), " ");
@@ -880,11 +857,9 @@ fn test_horizontal_edge_with_arrowhead() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Horizontal edge at y=2, arrowhead one cell left of node R's left border: (14, 2)
     let sym = buf[(14, 2)].symbol();
     assert_eq!(sym, "▶", "Horizontal arrowhead should be ▶, got: '{sym}'");
 
-    // Check horizontal line somewhere in the middle
     let mid_sym = buf[(10, 2)].symbol();
     assert_eq!(
         mid_sym, "─",
@@ -953,8 +928,6 @@ fn test_shared_branch_uses_junction_glyph() {
         .unwrap();
     let buf = terminal.backend().buffer();
 
-    // Both edges leave A through the same vertical segment, then split left/right.
-    // The split cell should be a clean T-junction, not whichever corner was drawn last.
     assert_eq!(buf[(15, 6)].symbol(), "┴");
 }
 
@@ -976,7 +949,6 @@ fn test_skips_nodes_without_layout() {
     };
     let backend = TestBackend::new(20, 8);
     let mut terminal = Terminal::new(backend).unwrap();
-    // Should not panic
     terminal
         .draw(|frame| render_to_frame(&graph, frame))
         .unwrap();
@@ -1031,8 +1003,6 @@ fn dump_graph(name: &str, graph: &Graph, width: u16, height: u16) {
 
 #[test]
 fn dump_default_graph() {
-    // Diagnostic: render the same graph main.rs uses, at a realistic terminal size,
-    // and print the buffer so we can see what the user sees.
     let input = r#"graph TD
 A[Start] --> B{Decision}
 B -->|yes| C(Process)

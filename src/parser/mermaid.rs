@@ -1,21 +1,12 @@
 use crate::model::*;
 use std::collections::HashMap;
 
-/// Parse a Mermaid flowchart string into a `Graph`.
-///
-/// Supports:
-/// - `graph TD`, `graph LR`, `flowchart TD`, `flowchart LR`
-/// - Node shapes: `A[text]` rect, `A(text)` rounded, `A{text}` diamond, `A((text))` circle, `A[(text)]` database/cylinder (mapped to rectangle)
-/// - Bare node refs: `A` → rectangle with id as label
-/// - Edges: `-->`, `---`, `-.->`, `-.-`, `==>`, with optional labels
-/// - Comments (`%%`), semicolons as separators
 pub fn parse(input: &str) -> Result<Graph, String> {
     let lines = preprocess(input);
     if lines.is_empty() {
         return Err("empty input".into());
     }
 
-    // First non-empty line must be the header.
     let (direction, rest) = parse_header(&lines)?;
 
     let mut nodes: Vec<Node> = Vec::new();
@@ -24,7 +15,6 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     let mut groups: Vec<Group> = Vec::new();
     let mut group_stack: Vec<usize> = Vec::new();
 
-    // Collect all statements — split by `;` and by newlines.
     let mut statements: Vec<String> = Vec::new();
     for line in rest {
         for part in line.split(';') {
@@ -69,9 +59,6 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     })
 }
 
-// ─── Preprocessing ────────────────────────────────────────────────────────────
-
-/// Strip comments, trim whitespace, drop blank lines. Returns non-empty lines.
 fn preprocess(input: &str) -> Vec<String> {
     input
         .lines()
@@ -80,8 +67,6 @@ fn preprocess(input: &str) -> Vec<String> {
         .map(|l| l.to_string())
         .collect()
 }
-
-// ─── Header ───────────────────────────────────────────────────────────────────
 
 fn parse_header<'a>(lines: &'a [String]) -> Result<(Direction, &'a [String]), String> {
     let first = &lines[0];
@@ -104,29 +89,26 @@ fn parse_header<'a>(lines: &'a [String]) -> Result<(Direction, &'a [String]), St
     Ok((dir, &lines[1..]))
 }
 
-// ─── Statement parsing ───────────────────────────────────────────────────────
-
 fn parse_statement(
     stmt: &str,
     nodes: &mut Vec<Node>,
     node_map: &mut HashMap<String, usize>,
     edges: &mut Vec<Edge>,
 ) -> Result<Vec<String>, String> {
-    // Try to parse as an edge statement. If the statement contains an edge
-    // operator we treat it as an edge (which also registers the two endpoint
-    // nodes). Otherwise it's a standalone node declaration.
-    if let Some(edge_result) = try_parse_edge(stmt)? {
-        let (src_id, src_shape, src_label, target_id, target_shape, target_label, edge) =
-            edge_result;
-        ensure_node(nodes, node_map, &src_id, &src_shape, &src_label);
-        ensure_node(nodes, node_map, &target_id, &target_shape, &target_label);
+    if let Some(parsed_edge) = try_parse_edge(stmt)? {
+        let ParsedEdgeStatement {
+            source,
+            target,
+            edge,
+        } = parsed_edge;
+        ensure_node(nodes, node_map, &source.id, &source.shape, &source.label);
+        ensure_node(nodes, node_map, &target.id, &target.shape, &target.label);
         edges.push(edge);
-        Ok(vec![src_id, target_id])
+        Ok(vec![source.id, target.id])
     } else {
-        // Standalone node declaration.
-        let (id, shape, label) = parse_node_decl(stmt)?;
-        ensure_node(nodes, node_map, &id, &shape, &label);
-        Ok(vec![id])
+        let node = parse_node_decl(stmt)?;
+        ensure_node(nodes, node_map, &node.id, &node.shape, &node.label);
+        Ok(vec![node.id])
     }
 }
 
@@ -185,8 +167,6 @@ fn ensure_node(
     label: &str,
 ) {
     if let Some(&idx) = node_map.get(id) {
-        // Update shape/label if the existing entry was a bare default and the
-        // new declaration carries richer info.
         let existing = &mut nodes[idx];
         if existing.label == existing.id && label != id {
             existing.label = label.to_string();
@@ -207,11 +187,32 @@ fn ensure_node(
     }
 }
 
-// ─── Edge parsing ─────────────────────────────────────────────────────────────
+#[derive(Debug, Clone)]
+struct ParsedNodeDecl {
+    id: String,
+    shape: NodeShape,
+    label: String,
+}
 
-/// All edge operators we recognise, ordered longest-first so greedy scan works.
+#[derive(Debug, Clone)]
+struct ParsedEdgeStatement {
+    source: ParsedNodeDecl,
+    target: ParsedNodeDecl,
+    edge: Edge,
+}
+
+impl ParsedNodeDecl {
+    fn new(id: impl Into<String>, shape: NodeShape, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            shape,
+            label: label.into(),
+        }
+    }
+}
+
 const EDGE_OPS: &[(&str, EdgeStyle, Arrowhead)] = &[
-    ("==>", EdgeStyle::Solid, Arrowhead::Normal), // thick (mapped to Solid)
+    ("==>", EdgeStyle::Solid, Arrowhead::Normal),
     ("-.->", EdgeStyle::Dashed, Arrowhead::Normal),
     ("-.-", EdgeStyle::Dashed, Arrowhead::None),
     ("-->", EdgeStyle::Solid, Arrowhead::Normal),
@@ -219,41 +220,16 @@ const EDGE_OPS: &[(&str, EdgeStyle, Arrowhead)] = &[
     ("--->", EdgeStyle::Solid, Arrowhead::Normal),
 ];
 
-/// Try to find an edge operator in `stmt`. Returns `None` if it's not an edge.
-fn try_parse_edge(
-    stmt: &str,
-) -> Result<
-    Option<(
-        String,    // source id
-        NodeShape, // source shape
-        String,    // source label
-        String,    // target id
-        NodeShape, // target shape
-        String,    // target label
-        Edge,
-    )>,
-    String,
-> {
-    // ── Strategy ──────────────────────────────────────────────────────────
-    // We need to handle two label syntaxes:
-    //   1. `A -->|label| B`            — pipe-delimited label after operator
-    //   2. `A -- label --> B`          — inline label between dashes
-    //
-    // For (2) we detect the pattern `-- <text> -->` before scanning for the
-    // plain operator.
-
-    // Try inline-label form first: `-- text -->`  or `-- text ---`
+fn try_parse_edge(stmt: &str) -> Result<Option<ParsedEdgeStatement>, String> {
     if let Some(result) = try_inline_label_edge(stmt)? {
         return Ok(Some(result));
     }
 
-    // Otherwise, scan for a bare operator.
     for &(op, ref style, ref arrow) in EDGE_OPS {
         if let Some(pos) = find_edge_op(stmt, op) {
             let lhs = stmt[..pos].trim();
             let mut rhs = stmt[pos + op.len()..].trim().to_string();
 
-            // Check for pipe-label: `-->|label| B`
             let label = if rhs.starts_with('|') {
                 let end_pipe = rhs[1..]
                     .find('|')
@@ -265,39 +241,35 @@ fn try_parse_edge(
                 None
             };
 
-            let (src_id, src_shape, src_label) = parse_node_decl(lhs)?;
-            let (tgt_id, tgt_shape, tgt_label) = parse_node_decl(&rhs)?;
+            let source = parse_node_decl(lhs)?;
+            let target = parse_node_decl(&rhs)?;
             let edge = Edge {
-                source: src_id.clone(),
-                target: tgt_id.clone(),
+                source: source.id.clone(),
+                target: target.id.clone(),
                 label,
                 style: style.clone(),
                 arrowhead: arrow.clone(),
                 route: None,
             };
-            return Ok(Some((
-                src_id, src_shape, src_label, tgt_id, tgt_shape, tgt_label, edge,
-            )));
+            return Ok(Some(ParsedEdgeStatement {
+                source,
+                target,
+                edge,
+            }));
         }
     }
 
     Ok(None)
 }
 
-/// Handle the `A -- text --> B` / `A -- text --- B` inline-label form.
-fn try_inline_label_edge(
-    stmt: &str,
-) -> Result<Option<(String, NodeShape, String, String, NodeShape, String, Edge)>, String> {
-    // Look for ` -- ` (with surrounding content).
+fn try_inline_label_edge(stmt: &str) -> Result<Option<ParsedEdgeStatement>, String> {
     let Some(dash_pos) = stmt.find(" -- ") else {
         return Ok(None);
     };
 
     let lhs = stmt[..dash_pos].trim();
-    let after = &stmt[dash_pos + 4..]; // skip ` -- `
+    let after = &stmt[dash_pos + " -- ".len()..];
 
-    // The remainder should be `<label> --> <target>` or `<label> --- <target>`.
-    // Find the closing edge operator.
     let Some((op, style, arrow, op_pos)) = EDGE_OPS
         .iter()
         .filter_map(|&(op, ref s, ref a)| {
@@ -315,24 +287,25 @@ fn try_inline_label_edge(
         return Ok(None);
     }
 
-    let (src_id, src_shape, src_label) = parse_node_decl(lhs)?;
-    let (tgt_id, tgt_shape, tgt_label) = parse_node_decl(rhs)?;
+    let source = parse_node_decl(lhs)?;
+    let target = parse_node_decl(rhs)?;
 
     let edge = Edge {
-        source: src_id.clone(),
-        target: tgt_id.clone(),
+        source: source.id.clone(),
+        target: target.id.clone(),
         label: Some(label_text),
         style,
         arrowhead: arrow,
         route: None,
     };
 
-    Ok(Some((
-        src_id, src_shape, src_label, tgt_id, tgt_shape, tgt_label, edge,
-    )))
+    Ok(Some(ParsedEdgeStatement {
+        source,
+        target,
+        edge,
+    }))
 }
 
-/// Find the position of `op` in `s`, but only when it's not inside brackets.
 fn find_edge_op(s: &str, op: &str) -> Option<usize> {
     let bytes = s.as_bytes();
     let op_bytes = op.as_bytes();
@@ -364,16 +337,12 @@ fn find_edge_op(s: &str, op: &str) -> Option<usize> {
     None
 }
 
-// ─── Node declaration parsing ────────────────────────────────────────────────
-
-/// Parse a node token like `A`, `A[Label]`, `A(Label)`, `A{Label}`, `A((Label))`, `A[(Label)]`.
-fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
+fn parse_node_decl(s: &str) -> Result<ParsedNodeDecl, String> {
     let s = s.trim();
     if s.is_empty() {
         return Err("empty node declaration".into());
     }
 
-    // Circle: `ID((label))`
     if let Some(open) = s.find("((") {
         let id = &s[..open];
         validate_id(id)?;
@@ -382,12 +351,9 @@ fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
             .find("))")
             .ok_or_else(|| format!("unclosed '((' in node '{s}'"))?;
         let label = rest[..close].to_string();
-        return Ok((id.to_string(), NodeShape::Circle, label));
+        return Ok(ParsedNodeDecl::new(id, NodeShape::Circle, label));
     }
 
-    // Database/cylinder: `ID[(label)]` (rendered as rectangle for now).
-    // This must be checked before rounded rect, because the first `(` belongs
-    // to the shape delimiter and the id is before `[`.
     if let Some(open) = s.find("[(") {
         let id = &s[..open];
         validate_id(id)?;
@@ -396,10 +362,9 @@ fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
             .rfind(")]")
             .ok_or_else(|| format!("unclosed '[(' in node '{s}'"))?;
         let label = rest[..close].to_string();
-        return Ok((id.to_string(), NodeShape::Rectangle, label));
+        return Ok(ParsedNodeDecl::new(id, NodeShape::Rectangle, label));
     }
 
-    // Rounded rect: `ID(label)`
     if let Some(open) = s.find('(') {
         let id = &s[..open];
         validate_id(id)?;
@@ -408,10 +373,9 @@ fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
             .rfind(')')
             .ok_or_else(|| format!("unclosed '(' in node '{s}'"))?;
         let label = rest[..close].to_string();
-        return Ok((id.to_string(), NodeShape::RoundedRect, label));
+        return Ok(ParsedNodeDecl::new(id, NodeShape::RoundedRect, label));
     }
 
-    // Rectangle: `ID[label]`
     if let Some(open) = s.find('[') {
         let id = &s[..open];
         validate_id(id)?;
@@ -420,10 +384,9 @@ fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
             .rfind(']')
             .ok_or_else(|| format!("unclosed '[' in node '{s}'"))?;
         let label = rest[..close].to_string();
-        return Ok((id.to_string(), NodeShape::Rectangle, label));
+        return Ok(ParsedNodeDecl::new(id, NodeShape::Rectangle, label));
     }
 
-    // Diamond: `ID{label}`
     if let Some(open) = s.find('{') {
         let id = &s[..open];
         validate_id(id)?;
@@ -432,12 +395,11 @@ fn parse_node_decl(s: &str) -> Result<(String, NodeShape, String), String> {
             .rfind('}')
             .ok_or_else(|| format!("unclosed '{{' in node '{s}'"))?;
         let label = rest[..close].to_string();
-        return Ok((id.to_string(), NodeShape::Diamond, label));
+        return Ok(ParsedNodeDecl::new(id, NodeShape::Diamond, label));
     }
 
-    // Bare identifier — rectangle with id as label.
     validate_id(s)?;
-    Ok((s.to_string(), NodeShape::Rectangle, s.to_string()))
+    Ok(ParsedNodeDecl::new(s, NodeShape::Rectangle, s))
 }
 
 fn validate_id(id: &str) -> Result<(), String> {

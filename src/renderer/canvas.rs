@@ -19,7 +19,6 @@ use crate::model::{
 };
 use crate::theme::{NodeTheme, Theme};
 
-/// Full terminal render — sets up crossterm, renders, waits for keypress, cleans up.
 pub fn render(graph: &Graph) -> io::Result<()> {
     enable_raw_mode()?;
     let mut out = stdout();
@@ -30,7 +29,6 @@ pub fn render(graph: &Graph) -> io::Result<()> {
 
     terminal.draw(|frame| render_to_frame(graph, frame))?;
 
-    // Wait for any keypress to exit
     loop {
         if let Event::Key(key) = event::read()? {
             if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
@@ -44,23 +42,17 @@ pub fn render(graph: &Graph) -> io::Result<()> {
     Ok(())
 }
 
-/// Render the whole graph into terminal scrollback instead of taking over the screen.
-///
-/// This is useful for large diagrams that exceed the current viewport. It renders to an
-/// in-memory Ratatui backend sized to the graph bounds, then prints the buffer as plain text.
 pub fn render_inline(graph: &Graph) -> io::Result<()> {
     let output = render_to_string(graph)?;
     println!("{output}");
     Ok(())
 }
 
-/// Render the whole graph into a string. Exposed for tests and inline mode.
 pub fn render_to_string(graph: &Graph) -> io::Result<String> {
     let theme = Theme::default();
     render_to_string_with_theme(graph, &theme)
 }
 
-/// Render the whole graph into a string using a specific theme.
 pub fn render_to_string_with_theme(graph: &Graph, theme: &Theme) -> io::Result<String> {
     let (width, height) = graph_bounds(graph);
     let backend = TestBackend::new(width, height);
@@ -199,35 +191,29 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
     (max_x.ceil() as u16, max_y.ceil() as u16)
 }
 
-/// Testable inner function — draws graph onto a Frame.
 pub fn render_to_frame(graph: &Graph, frame: &mut Frame) {
     let theme = Theme::default();
     render_to_frame_with_theme(graph, frame, &theme);
 }
 
-/// Draw the graph using a specific theme.
 pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
 
-    // Render group boxes behind nodes and edges.
     for group in &graph.groups {
         render_group(group, frame, area, theme);
     }
 
-    // Tight, one-cell card shadows first.
     for node in &graph.nodes {
         render_node_shadow(node, frame, area, theme);
     }
 
-    // Render filled terminal-native cards.
     for node in &graph.nodes {
         render_node(node, frame, area, theme);
     }
 
-    // Render edges on top so arrowheads remain visible at node boundaries.
     render_edges(graph, frame, area, theme);
 }
 
@@ -281,7 +267,6 @@ fn group_rect(group: &Group) -> Option<Rect> {
     ))
 }
 
-/// Render a very subtle one-cell cast shadow behind a card.
 fn render_node_shadow(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
     if node.id.starts_with("__dummy") {
         return;
@@ -295,8 +280,6 @@ fn render_node_shadow(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme)
     let buf = frame.buffer_mut();
     let style = Style::default().fg(theme.shadow).bg(Color::Reset);
 
-    // Thin right-side shadow. Keep it lighter than the bottom shadow so it
-    // reads as a subtle side falloff rather than an outline.
     let shadow_x = rect.x.saturating_add(rect.width);
     if shadow_x < area.right() {
         for y in rect.y.saturating_add(1)..rect.y.saturating_add(rect.height) {
@@ -306,8 +289,6 @@ fn render_node_shadow(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme)
         }
     }
 
-    // Thin bottom shadow spanning the card width. This is much less heavy than
-    // bg-filled cells because `▔` only occupies a small top slice of the cell.
     let shadow_y = rect.y.saturating_add(rect.height);
     if shadow_y < area.bottom() {
         for x in rect.x..rect.x.saturating_add(rect.width) {
@@ -318,7 +299,6 @@ fn render_node_shadow(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme)
     }
 }
 
-/// Render a single node as a borderless, filled terminal card.
 fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
     if node.id.starts_with("__dummy") {
         return;
@@ -326,7 +306,7 @@ fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
 
     let rect = match node_rect(node) {
         Some(rect) if rect_inside(rect, area) => rect,
-        _ => return, // skip nodes without layout or outside viewport
+        _ => return,
     };
 
     let node_theme = theme.node(&node.shape);
@@ -353,9 +333,7 @@ fn rect_inside(rect: Rect, area: Rect) -> bool {
         && rect.y.saturating_add(rect.height) <= area.y.saturating_add(area.height)
 }
 
-/// Create a Paragraph that centers the node label both horizontally and vertically.
 fn center_label(node: &Node, node_theme: NodeTheme, area: Rect) -> Paragraph<'_> {
-    // Vertical centering: compute top padding as blank lines
     let v_pad = if area.height > 1 {
         (area.height.saturating_sub(1)) / 2
     } else {
@@ -390,7 +368,6 @@ fn center_label(node: &Node, node_theme: NodeTheme, area: Rect) -> Paragraph<'_>
     Paragraph::new(Text::from(lines)).style(Style::default().fg(node_theme.text))
 }
 
-/// Render all edges in the graph.
 fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect, theme: &Theme) {
     for edge in &graph.edges {
         let source = graph.nodes.iter().find(|n| n.id == edge.source);
@@ -402,7 +379,6 @@ fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect, theme: &Theme) {
     }
 }
 
-/// Compute the center of a node.
 fn node_center(node: &Node) -> Option<(u16, u16)> {
     match (node.x, node.y, node.width, node.height) {
         (Some(x), Some(y), Some(w), Some(h)) => Some(((x + w / 2.0) as u16, (y + h / 2.0) as u16)),
@@ -410,11 +386,6 @@ fn node_center(node: &Node) -> Option<(u16, u16)> {
     }
 }
 
-/// Compute the connection point just outside the border of a node.
-/// Uses layout direction to pick the correct side:
-/// - TopDown: source exits from bottom, target enters from top
-/// - LeftRight: source exits from right, target enters from left
-/// Falls back to "toward center" heuristic only when nodes are on the same layer.
 fn connection_point(
     node: &Node,
     toward_x: u16,
@@ -437,15 +408,11 @@ fn connection_point(
 
     match direction {
         Direction::TopDown => {
-            // Check if nodes are on roughly the same layer (same y region)
             let dx = toward_x as i32 - cx as i32;
             let dy = toward_y as i32 - cy as i32;
             if is_source && dy > 0 {
-                // Source exits from bottom center
                 Some((cx, y + h))
             } else if !is_source && dy < 0 {
-                // If a routed/dummy segment is clearly beside the target, enter from
-                // the side instead of forcing an ugly loop back into the top.
                 if allow_side_target && dx.abs() > (w as i32 / 2) {
                     if dx > 0 {
                         Some((x + w, cy))
@@ -453,21 +420,17 @@ fn connection_point(
                         Some((x.saturating_sub(1), cy))
                     }
                 } else {
-                    // Target enters from top center (one cell above the border)
                     Some((cx, y.saturating_sub(1)))
                 }
             } else {
-                // Same layer or unusual arrangement — fall back to heuristic
                 connection_point_heuristic(x, y, w, h, cx, cy, toward_x, toward_y)
             }
         }
         Direction::LeftRight => {
             let dx = toward_x as i32 - cx as i32;
             if is_source && dx > 0 {
-                // Source exits from right center
                 Some((x + w, cy))
             } else if !is_source && dx < 0 {
-                // Target enters from left center
                 Some((x.saturating_sub(1), cy))
             } else {
                 connection_point_heuristic(x, y, w, h, cx, cy, toward_x, toward_y)
@@ -476,7 +439,6 @@ fn connection_point(
     }
 }
 
-/// Fallback heuristic: pick the border side closest to the target point.
 fn connection_point_heuristic(
     x: u16,
     y: u16,
@@ -505,7 +467,6 @@ fn connection_point_heuristic(
     }
 }
 
-/// Edge character for the given style.
 fn edge_h_char(style: &EdgeStyle) -> char {
     match style {
         EdgeStyle::Solid => '─',
@@ -533,7 +494,6 @@ fn edge_class_style(class: Option<&EdgeClass>, theme: &Theme) -> Style {
     Style::default().fg(fg).bg(Color::Reset)
 }
 
-/// Arrowhead character based on direction.
 fn arrowhead_char(dx: i32, dy: i32, arrowhead: &Arrowhead) -> Option<char> {
     match arrowhead {
         Arrowhead::None => None,
@@ -558,14 +518,19 @@ fn arrow_vector_into_node(node: &Node, end: (u16, u16)) -> Option<(i32, i32)> {
         _ => return None,
     };
 
-    if end.0 == x.saturating_sub(1) {
-        Some((1, 0)) // left side: point right into node
-    } else if end.0 == x + w {
-        Some((-1, 0)) // right side: point left into node
-    } else if end.1 == y.saturating_sub(1) {
-        Some((0, 1)) // top side: point down into node
-    } else if end.1 == y + h {
-        Some((0, -1)) // bottom side: point up into node
+    let touches_left_side = end.0 == x.saturating_sub(1);
+    let touches_right_side = end.0 == x + w;
+    let touches_top_side = end.1 == y.saturating_sub(1);
+    let touches_bottom_side = end.1 == y + h;
+
+    if touches_left_side {
+        Some((1, 0))
+    } else if touches_right_side {
+        Some((-1, 0))
+    } else if touches_top_side {
+        Some((0, 1))
+    } else if touches_bottom_side {
+        Some((0, -1))
     } else {
         None
     }
@@ -671,11 +636,6 @@ fn routed_render_points(route: &RoutePlan) -> Vec<(u16, u16)> {
     if target_index == 0 || points.get(target_index - 1).copied() != Some(target_tail) {
         points.insert(target_index, target_tail);
 
-        // If the existing route approached the target on the arrowhead row/column,
-        // make it turn onto the tail row/column before the arrowhead. Otherwise a
-        // `▼` can still have a horizontal segment attached to it, which reads as a
-        // sideways arrow with the wrong head. The final segment into the target must
-        // be the one-cell tail in the arrow direction.
         let tail_index = points.len() - 2;
         if tail_index > 0 {
             let prev = points[tail_index - 1];
@@ -712,7 +672,6 @@ fn glyph_dirs(ch: char) -> u8 {
     }
 }
 
-/// Check if a cell position is inside any node's bounding box.
 fn is_inside_any_node(px: u16, py: u16, nodes: &[Node]) -> bool {
     for node in nodes {
         if let (Some(nx), Some(ny), Some(nw), Some(nh)) = (node.x, node.y, node.width, node.height)
@@ -729,7 +688,6 @@ fn is_inside_any_node(px: u16, py: u16, nodes: &[Node]) -> bool {
     false
 }
 
-/// Render a single edge between two nodes using orthogonal routing.
 fn render_edge(
     src: &Node,
     tgt: &Node,
@@ -769,9 +727,6 @@ fn render_edge(
 
     let edge_style = edge_class_style(edge.route.as_ref().map(|route| &route.class), theme);
 
-    // Helper: set a cell only if it's in bounds and NOT inside any node's bounding box.
-    // Solid edge glyphs merge with existing solid edge glyphs so shared branches form
-    // proper junctions (`┴`, `┬`, `┼`, etc.) instead of overwriting each other.
     let set_cell = |buf: &mut ratatui::buffer::Buffer,
                     px: u16,
                     py: u16,
@@ -932,8 +887,6 @@ fn render_edge(
     if *direction == Direction::TopDown {
         let mid_y = (start.1 + end.1) / 2;
 
-        // 1. Vertical from start to mid_y. If this edge has a bend, leave the
-        // bend cell for the corner glyph so it doesn't over-connect as `┼`.
         let (y0, y1) = min_max(start.1, mid_y);
         for y in y0..=y1 {
             if start.0 == end.0 || y != mid_y {
@@ -948,7 +901,6 @@ fn render_edge(
             }
         }
 
-        // 2. Horizontal from start.0 to end.0 at mid_y
         if start.0 != end.0 {
             let (x0, x1) = min_max(start.0, end.0);
             for x in x0..=x1 {
@@ -963,7 +915,6 @@ fn render_edge(
                     );
                 }
             }
-            // Corners
             if edge.style == EdgeStyle::Solid {
                 let corner1 = if end.0 > start.0 {
                     if mid_y >= start.1 { '└' } else { '┌' }
@@ -984,8 +935,6 @@ fn render_edge(
             }
         }
 
-        // 3. Vertical from mid_y to end.1. If this edge has a bend, leave the
-        // bend cell for the corner glyph.
         let (y0, y1) = min_max(mid_y, end.1);
         for y in y0..=y1 {
             if start.0 == end.0 || y != mid_y {
@@ -1000,9 +949,6 @@ fn render_edge(
             }
         }
 
-        // Arrow direction should reflect the actual final segment into the target.
-        // Most TopDown edges enter vertically from above, but side-entry routed
-        // edges can end on the same row as the horizontal middle segment.
         if start.0 != end.0 && end.1 == mid_y {
             arrow_dx = end.0 as i32 - start.0 as i32;
             arrow_dy = 0;
@@ -1016,8 +962,6 @@ fn render_edge(
     } else {
         let mid_x = (start.0 + end.0) / 2;
 
-        // 1. Horizontal from start to mid_x. If this edge has a bend, leave the
-        // bend cell for the corner glyph.
         let (x0, x1) = min_max(start.0, mid_x);
         for x in x0..=x1 {
             if start.1 == end.1 || x != mid_x {
@@ -1032,7 +976,6 @@ fn render_edge(
             }
         }
 
-        // 2. Vertical from start.1 to end.1 at mid_x
         if start.1 != end.1 {
             let (y0, y1) = min_max(start.1, end.1);
             for y in y0..=y1 {
@@ -1047,7 +990,6 @@ fn render_edge(
                     );
                 }
             }
-            // Corners
             if edge.style == EdgeStyle::Solid {
                 let corner1 = if end.1 > start.1 {
                     if mid_x >= start.0 { '┐' } else { '┌' }
@@ -1068,8 +1010,6 @@ fn render_edge(
             }
         }
 
-        // 3. Horizontal from mid_x to end.0. If this edge has a bend, leave the
-        // bend cell for the corner glyph.
         let (x0, x1) = min_max(mid_x, end.0);
         for x in x0..=x1 {
             if start.1 == end.1 || x != mid_x {
@@ -1084,9 +1024,6 @@ fn render_edge(
             }
         }
 
-        // Arrow direction should reflect the actual final segment into the target.
-        // Most LeftRight edges enter horizontally from the left, but vertical
-        // side-entry routes can end on the same column as the middle segment.
         if start.1 != end.1 && end.0 == mid_x {
             arrow_dx = 0;
             arrow_dy = end.1 as i32 - start.1 as i32;
@@ -1099,21 +1036,17 @@ fn render_edge(
         label_y = (start.1 + end.1) / 2;
     }
 
-    // Prefer arrowheads that point into the target node's touched side. This
-    // matters for long/dummy-routed edges that enter from the left/right side.
     if let Some((dx, dy)) = arrow_vector_into_node(tgt, end) {
         arrow_dx = dx;
         arrow_dy = dy;
     }
 
-    // Arrowhead at the end point — always draw (even near nodes) so it's visible
     if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
         if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
             buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
         }
     }
 
-    // Edge label at midpoint, offset perpendicular to the middle segment
     if let Some(ref label) = edge.label {
         let actually_horizontal = if *direction == Direction::TopDown {
             start.0 != end.0
@@ -1122,18 +1055,14 @@ fn render_edge(
         };
 
         let (lx, ly) = if actually_horizontal {
-            // Offset label above the horizontal line
             let start_x = label_x.saturating_sub((label.len() / 2) as u16);
             (start_x, label_y.saturating_sub(1))
         } else {
-            // Offset label to the right of the vertical line
             (label_x + 1, label_y)
         };
 
         let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
 
-        // Draw the label as text only. Keep the glyphs unchanged so routing tests
-        // and Mermaid label text stay stable.
         for (i, ch) in label.chars().enumerate() {
             let px = lx + i as u16;
             if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {

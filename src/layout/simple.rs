@@ -1,41 +1,25 @@
 use super::LayoutEngine;
 use crate::model::{
-    Direction, Edge, EdgeClass, EdgeStyle, Graph, Node, NodeShape, Port, PortSide, RoutePlan,
-    RoutePoint,
+    Arrowhead, Direction, Edge, EdgeClass, EdgeStyle, Graph, Node, NodeShape, Port, PortSide,
+    RoutePlan, RoutePoint,
 };
 use std::collections::{HashMap, HashSet, VecDeque};
 
-// ── Layout constants ────────────────────────────────────────────────────────
-// All values are in character-cell units.
+const NODE_PADDING_X: f64 = 1.0;
+const NODE_PADDING_Y: f64 = 0.0;
+const MIN_NODE_WIDTH: f64 = 8.0;
+const MIN_NODE_HEIGHT: f64 = 3.0;
+const NODE_GAP_WITHIN_LAYER: f64 = 8.0;
+const LAYER_GAP: f64 = 5.0;
+const DIAMOND_WIDTH_FACTOR: f64 = 1.0;
+const GROUP_PADDING_X: f64 = 2.0;
+const GROUP_PADDING_Y: f64 = 1.0;
+const DUMMY_NODE_PREFIX: &str = "__dummy";
+const BARYCENTER_SWEEPS: usize = 4;
+const SHARED_SINK_BUNDLE_MIN_DEGREE: usize = 4;
+const SHARED_SOURCE_BUNDLE_MIN_DEGREE: usize = 4;
+const PERIMETER_TELEMETRY_DEGREE: usize = 3;
 
-/// Horizontal padding inside a node (each side).
-const PADDING_H: f64 = 1.0;
-
-/// Vertical padding inside a node (each side).
-/// Keep this compact; terminal rows are already visually tall.
-const PADDING_V: f64 = 0.0;
-
-/// Minimum node width so tiny labels still look good.
-const MIN_WIDTH: f64 = 8.0;
-
-/// Minimum node height.
-/// Three rows gives cards a true middle row for vertically centered text.
-const MIN_HEIGHT: f64 = 3.0;
-
-/// Horizontal gap between sibling nodes in the same layer.
-const SPACING_H: f64 = 8.0;
-
-/// Vertical gap between layers.
-const SPACING_V: f64 = 5.0;
-
-/// Extra size multiplier for diamonds.
-/// Kept at 1.0 because diamonds are rendered as semantic boxed nodes (`◆ label`).
-const DIAMOND_FACTOR: f64 = 1.0;
-
-/// Diaview's current native layered layout engine.
-///
-/// This preserves the pre-abstraction layout behavior while providing a stable
-/// extension point for future engines.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct SimpleLayoutEngine;
 
@@ -45,535 +29,621 @@ impl LayoutEngine for SimpleLayoutEngine {
     }
 }
 
-/// The default engine algorithm:
-/// 1. Size every node from its label + padding.
-/// 2. Assign layers via BFS from root nodes (no incoming edges).
-/// 3. Order nodes within each layer (insertion-stable, with a barycenter
-///    heuristic to reduce edge crossings).
-/// 4. Assign coordinates: layer index controls the "main axis" position;
-///    position within the layer controls the "cross axis".
 fn layout_graph(graph: &mut Graph) {
     if graph.nodes.is_empty() {
         return;
     }
 
-    // Step 1: compute sizes
     size_nodes(&mut graph.nodes);
 
-    // Step 2: assign layers
-    let id_to_idx: HashMap<String, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.clone(), i))
-        .collect();
+    let node_indices = node_indices_by_id(&graph.nodes);
+    let mut layers = assign_layers(graph, &node_indices);
+    insert_dummies(graph, &mut layers, &node_indices);
 
-    let mut layers = assign_layers(graph, &id_to_idx);
+    let node_indices = node_indices_by_id(&graph.nodes);
+    let ordered_layers = order_layers(&layers, graph, &node_indices);
 
-    // Step 2.5: insert dummy nodes for long edges
-    insert_dummies(graph, &mut layers, &id_to_idx);
-
-    // Rebuild index mapping since graph.nodes may have grown
-    let id_to_idx: HashMap<String, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(i, n)| (n.id.clone(), i))
-        .collect();
-
-    // Step 3: order within layers (barycenter heuristic)
-    let ordered_layers = order_layers(&layers, graph, &id_to_idx);
-
-    // Step 4: assign positions
-    assign_positions(graph, &ordered_layers, &id_to_idx);
-
-    // Step 5: compute group bounds from positioned member nodes.
+    assign_positions(graph, &ordered_layers);
     assign_group_bounds(graph);
-
-    // Step 6: compute layout-owned edge route metadata.
     assign_route_plans(graph);
 }
 
-// ── Step 1: sizing ──────────────────────────────────────────────────────────
+fn node_indices_by_id(nodes: &[Node]) -> HashMap<String, usize> {
+    nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.id.clone(), index))
+        .collect()
+}
+
+fn is_dummy_id(id: &str) -> bool {
+    id.starts_with(DUMMY_NODE_PREFIX)
+}
+
+fn is_dummy_node(node: &Node) -> bool {
+    is_dummy_id(&node.id)
+}
 
 fn size_nodes(nodes: &mut [Node]) {
     for node in nodes.iter_mut() {
-        let label_len = match node.shape {
-            // Semantic boxed shapes render an icon plus a space before the label.
-            NodeShape::Diamond | NodeShape::Circle => node.label.len() as f64 + 2.0,
-            _ => node.label.len() as f64,
-        };
+        let label_width = label_cell_width(node);
+        let (width, height) = node_shape_size(node, label_width);
 
-        let (w, h) = match node.shape {
-            NodeShape::Diamond => {
-                let mut w = (label_len + PADDING_H * 2.0 + 2.0) * DIAMOND_FACTOR;
-                let h = 1.0 + PADDING_V * 2.0;
-                w = w.ceil();
-                if w as i64 % 2 != 0 {
-                    w += 1.0;
-                }
-                (w, h)
-            }
-            NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect => {
-                let mut w = label_len + PADDING_H * 2.0 + 2.0;
-                w = w.ceil();
-                if w as i64 % 2 != 0 {
-                    w += 1.0;
-                }
-                let h = 1.0 + PADDING_V * 2.0;
-                (w, h)
-            }
-        };
-
-        node.width = Some(w.max(MIN_WIDTH));
-        node.height = Some(h.max(MIN_HEIGHT));
+        node.width = Some(width.max(MIN_NODE_WIDTH));
+        node.height = Some(height.max(MIN_NODE_HEIGHT));
     }
 }
 
-// ── Step 2: layer assignment (BFS from roots) ───────────────────────────────
+fn label_cell_width(node: &Node) -> f64 {
+    match node.shape {
+        NodeShape::Diamond | NodeShape::Circle => node.label.len() as f64 + 2.0,
+        _ => node.label.len() as f64,
+    }
+}
 
-/// Returns `Vec<Vec<usize>>` — each inner vec is the set of node indices in
-/// that layer (layer 0 = roots).
-fn assign_layers(graph: &Graph, id_to_idx: &HashMap<String, usize>) -> Vec<Vec<usize>> {
-    let n = graph.nodes.len();
+fn node_shape_size(node: &Node, label_width: f64) -> (f64, f64) {
+    let width = match node.shape {
+        NodeShape::Diamond => (label_width + NODE_PADDING_X * 2.0 + 2.0) * DIAMOND_WIDTH_FACTOR,
+        NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect => {
+            label_width + NODE_PADDING_X * 2.0 + 2.0
+        }
+    };
 
-    // Build adjacency: children[i] = nodes that i points to.
-    let mut children: Vec<Vec<usize>> = vec![vec![]; n];
-    let mut in_degree: Vec<usize> = vec![0; n];
+    (round_up_to_even(width), 1.0 + NODE_PADDING_Y * 2.0)
+}
+
+fn round_up_to_even(value: f64) -> f64 {
+    let mut rounded = value.ceil();
+    if rounded as i64 % 2 != 0 {
+        rounded += 1.0;
+    }
+    rounded
+}
+
+fn assign_layers(graph: &Graph, node_indices_by_id: &HashMap<String, usize>) -> Vec<Vec<usize>> {
+    let adjacency = build_adjacency(graph, node_indices_by_id);
+    let mut order = topological_order(&adjacency);
+    append_missing_nodes(&mut order, graph.nodes.len());
+
+    let parents_by_node = parents_by_node(&adjacency.children_by_node);
+    let layer_by_node = assign_layer_by_node(&order, &parents_by_node);
+
+    group_nodes_by_layer(&layer_by_node)
+}
+
+#[derive(Debug, Clone)]
+struct Adjacency {
+    children_by_node: Vec<Vec<usize>>,
+    incoming_count_by_node: Vec<usize>,
+}
+
+fn build_adjacency(graph: &Graph, node_indices_by_id: &HashMap<String, usize>) -> Adjacency {
+    let node_count = graph.nodes.len();
+    let mut children_by_node = vec![vec![]; node_count];
+    let mut incoming_count_by_node = vec![0; node_count];
 
     for edge in &graph.edges {
-        if let (Some(&src), Some(&tgt)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
-        {
-            children[src].push(tgt);
-            in_degree[tgt] += 1;
+        let Some(&source_index) = node_indices_by_id.get(&edge.source) else {
+            continue;
+        };
+        let Some(&target_index) = node_indices_by_id.get(&edge.target) else {
+            continue;
+        };
+
+        children_by_node[source_index].push(target_index);
+        incoming_count_by_node[target_index] += 1;
+    }
+
+    Adjacency {
+        children_by_node,
+        incoming_count_by_node,
+    }
+}
+
+fn topological_order(adjacency: &Adjacency) -> Vec<usize> {
+    let node_count = adjacency.children_by_node.len();
+    let mut order = Vec::with_capacity(node_count);
+    let mut remaining_parent_count = adjacency.incoming_count_by_node.clone();
+    let mut ready_nodes = VecDeque::new();
+
+    for node_index in 0..node_count {
+        if remaining_parent_count[node_index] == 0 {
+            ready_nodes.push_back(node_index);
         }
     }
 
-    // Roots: nodes with no incoming edges.
-    let mut queue: VecDeque<usize> = VecDeque::new();
-    let mut depth: Vec<Option<usize>> = vec![None; n];
+    while let Some(node_index) = ready_nodes.pop_front() {
+        order.push(node_index);
 
-    for i in 0..n {
-        if in_degree[i] == 0 {
-            queue.push_back(i);
-            depth[i] = Some(0);
-        }
-    }
-
-    // BFS — assign each node the layer = max(parent layers) + 1 so that
-    // long edges push nodes deeper rather than creating overlaps.
-    // We use a modified BFS: process in topological order and always take
-    // the maximum depth offered by any parent.
-    // Re-do with Kahn's algorithm for proper topological order.
-    let mut topo_order: Vec<usize> = Vec::with_capacity(n);
-    let mut remaining_in = in_degree.clone();
-    let mut topo_queue: VecDeque<usize> = VecDeque::new();
-
-    for i in 0..n {
-        if remaining_in[i] == 0 {
-            topo_queue.push_back(i);
-        }
-    }
-
-    while let Some(u) = topo_queue.pop_front() {
-        topo_order.push(u);
-        for &v in &children[u] {
-            remaining_in[v] -= 1;
-            if remaining_in[v] == 0 {
-                topo_queue.push_back(v);
+        for &child_index in &adjacency.children_by_node[node_index] {
+            remaining_parent_count[child_index] -= 1;
+            if remaining_parent_count[child_index] == 0 {
+                ready_nodes.push_back(child_index);
             }
         }
     }
 
-    // Handle nodes not reached by topo sort (cycles / disconnected).
-    let in_topo: HashSet<usize> = topo_order.iter().copied().collect();
-    for i in 0..n {
-        if !in_topo.contains(&i) {
-            topo_order.push(i);
-        }
-    }
-
-    // Assign layers: depth = max(depth of any parent) + 1
-    let mut node_layer: Vec<usize> = vec![0; n];
-    // parent map
-    let mut parents: Vec<Vec<usize>> = vec![vec![]; n];
-    for (u, kids) in children.iter().enumerate() {
-        for &v in kids {
-            parents[v].push(u);
-        }
-    }
-
-    for &u in &topo_order {
-        let layer = if parents[u].is_empty() {
-            0
-        } else {
-            parents[u]
-                .iter()
-                .map(|&p| node_layer[p] + 1)
-                .max()
-                .unwrap_or(0)
-        };
-        node_layer[u] = layer;
-    }
-
-    // Group by layer.
-    let max_layer = node_layer.iter().copied().max().unwrap_or(0);
-    let mut layers: Vec<Vec<usize>> = vec![vec![]; max_layer + 1];
-    for (i, &l) in node_layer.iter().enumerate() {
-        layers[l].push(i);
-    }
-
-    layers
+    order
 }
 
-// ── Step 2.5: dummy node insertion for long edges ───────────────────────────
+fn append_missing_nodes(order: &mut Vec<usize>, node_count: usize) {
+    let ordered_nodes: HashSet<usize> = order.iter().copied().collect();
+    for node_index in 0..node_count {
+        if !ordered_nodes.contains(&node_index) {
+            order.push(node_index);
+        }
+    }
+}
+
+fn parents_by_node(children_by_node: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut parents_by_node = vec![vec![]; children_by_node.len()];
+    for (parent_index, children) in children_by_node.iter().enumerate() {
+        for &child_index in children {
+            parents_by_node[child_index].push(parent_index);
+        }
+    }
+    parents_by_node
+}
+
+fn assign_layer_by_node(order: &[usize], parents_by_node: &[Vec<usize>]) -> Vec<usize> {
+    let mut layer_by_node = vec![0; parents_by_node.len()];
+    for &node_index in order {
+        layer_by_node[node_index] = parents_by_node[node_index]
+            .iter()
+            .map(|&parent_index| layer_by_node[parent_index] + 1)
+            .max()
+            .unwrap_or(0);
+    }
+    layer_by_node
+}
+
+fn group_nodes_by_layer(layer_by_node: &[usize]) -> Vec<Vec<usize>> {
+    let max_layer = layer_by_node.iter().copied().max().unwrap_or(0);
+    let mut nodes_by_layer = vec![vec![]; max_layer + 1];
+
+    for (node_index, &layer) in layer_by_node.iter().enumerate() {
+        nodes_by_layer[layer].push(node_index);
+    }
+
+    nodes_by_layer
+}
 
 fn insert_dummies(
     graph: &mut Graph,
     layers: &mut Vec<Vec<usize>>,
-    id_to_idx: &HashMap<String, usize>,
+    node_indices_by_id: &HashMap<String, usize>,
 ) {
-    // Reverse map to easily find node layer
-    let mut node_to_layer = HashMap::new();
-    for (l, layer) in layers.iter().enumerate() {
-        for &n in layer {
-            node_to_layer.insert(n, l);
+    let layer_by_node = layer_by_node_index(layers);
+    let mut known_node_indices = node_indices_by_id.clone();
+    let mut replacement_edges = Vec::new();
+    let mut removed_edge_indices = HashSet::new();
+    let original_edges = graph.edges.clone();
+
+    for (edge_index, edge) in original_edges.iter().enumerate() {
+        let Some(&source_index) = known_node_indices.get(&edge.source) else {
+            continue;
+        };
+        let Some(&target_index) = known_node_indices.get(&edge.target) else {
+            continue;
+        };
+
+        let source_layer = *layer_by_node.get(&source_index).unwrap_or(&0);
+        let target_layer = *layer_by_node.get(&target_index).unwrap_or(&0);
+        if target_layer <= source_layer + 1 {
+            continue;
+        }
+
+        removed_edge_indices.insert(edge_index);
+        replacement_edges.extend(split_long_edge_with_dummies(
+            graph,
+            layers,
+            &mut known_node_indices,
+            edge,
+            source_layer,
+            target_layer,
+        ));
+    }
+
+    let mut retained_edges = Vec::new();
+    for (edge_index, edge) in graph.edges.drain(..).enumerate() {
+        if !removed_edge_indices.contains(&edge_index) {
+            retained_edges.push(edge);
         }
     }
 
-    let mut new_edges = Vec::new();
-    let mut edges_to_remove = HashSet::new();
-
-    for (i, edge) in graph.edges.iter().enumerate() {
-        if let (Some(&u), Some(&v)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target)) {
-            let l_u = *node_to_layer.get(&u).unwrap_or(&0);
-            let l_v = *node_to_layer.get(&v).unwrap_or(&0);
-
-            if l_v > l_u + 1 {
-                // Long edge spanning multiple layers!
-                edges_to_remove.insert(i);
-
-                let mut current_src = edge.source.clone();
-
-                for l in (l_u + 1)..l_v {
-                    let dummy_id = format!("__dummy_{}_{}_{}", edge.source, edge.target, l);
-
-                    // Avoid inserting the same dummy multiple times
-                    if !id_to_idx.contains_key(&dummy_id) {
-                        let dummy_node = Node {
-                            id: dummy_id.clone(),
-                            label: "".into(),
-                            shape: NodeShape::Rectangle,
-                            x: None,
-                            y: None,
-                            width: Some(0.0),
-                            height: Some(0.0),
-                        };
-                        let dummy_idx = graph.nodes.len();
-                        graph.nodes.push(dummy_node);
-
-                        // Add to layer
-                        while layers.len() <= l {
-                            layers.push(vec![]);
-                        }
-                        layers[l].push(dummy_idx);
-                    }
-
-                    // Connect current source to this dummy
-                    new_edges.push(crate::model::Edge {
-                        source: current_src.clone(),
-                        target: dummy_id.clone(),
-                        // Place label on the first segment only
-                        label: if current_src == edge.source {
-                            edge.label.clone()
-                        } else {
-                            None
-                        },
-                        style: edge.style.clone(),
-                        // Only the final segment gets the arrowhead
-                        arrowhead: crate::model::Arrowhead::None,
-                        route: None,
-                    });
-
-                    current_src = dummy_id;
-                }
-
-                // Connect the last dummy to the actual target
-                new_edges.push(crate::model::Edge {
-                    source: current_src,
-                    target: edge.target.clone(),
-                    label: None,
-                    style: edge.style.clone(),
-                    arrowhead: edge.arrowhead.clone(),
-                    route: None,
-                });
-            }
-        }
-    }
-
-    // Remove old edges, add new segmented edges
-    let mut final_edges = Vec::new();
-    for (i, edge) in graph.edges.drain(..).enumerate() {
-        if !edges_to_remove.contains(&i) {
-            final_edges.push(edge);
-        }
-    }
-    final_edges.extend(new_edges);
-    graph.edges = final_edges;
+    retained_edges.extend(replacement_edges);
+    graph.edges = retained_edges;
 }
 
-// ── Step 3: ordering within layers (barycenter heuristic) ───────────────────
+fn layer_by_node_index(layers: &[Vec<usize>]) -> HashMap<usize, usize> {
+    let mut layer_by_node = HashMap::new();
+    for (layer_index, layer) in layers.iter().enumerate() {
+        for &node_index in layer {
+            layer_by_node.insert(node_index, layer_index);
+        }
+    }
+    layer_by_node
+}
+
+fn split_long_edge_with_dummies(
+    graph: &mut Graph,
+    layers: &mut Vec<Vec<usize>>,
+    known_node_indices: &mut HashMap<String, usize>,
+    edge: &Edge,
+    source_layer: usize,
+    target_layer: usize,
+) -> Vec<Edge> {
+    let mut segment_edges = Vec::new();
+    let mut segment_source = edge.source.clone();
+
+    for layer in (source_layer + 1)..target_layer {
+        let dummy_id = format!(
+            "{}_{}_{}_{}",
+            DUMMY_NODE_PREFIX, edge.source, edge.target, layer
+        );
+        ensure_dummy_node(graph, layers, known_node_indices, &dummy_id, layer);
+
+        segment_edges.push(Edge {
+            source: segment_source.clone(),
+            target: dummy_id.clone(),
+            label: first_segment_label(edge, &segment_source),
+            style: edge.style.clone(),
+            arrowhead: Arrowhead::None,
+            route: None,
+        });
+
+        segment_source = dummy_id;
+    }
+
+    segment_edges.push(Edge {
+        source: segment_source,
+        target: edge.target.clone(),
+        label: None,
+        style: edge.style.clone(),
+        arrowhead: edge.arrowhead.clone(),
+        route: None,
+    });
+
+    segment_edges
+}
+
+fn ensure_dummy_node(
+    graph: &mut Graph,
+    layers: &mut Vec<Vec<usize>>,
+    known_node_indices: &mut HashMap<String, usize>,
+    dummy_id: &str,
+    layer: usize,
+) {
+    if known_node_indices.contains_key(dummy_id) {
+        return;
+    }
+
+    let dummy_index = graph.nodes.len();
+    graph.nodes.push(Node {
+        id: dummy_id.to_string(),
+        label: String::new(),
+        shape: NodeShape::Rectangle,
+        x: None,
+        y: None,
+        width: Some(0.0),
+        height: Some(0.0),
+    });
+
+    while layers.len() <= layer {
+        layers.push(vec![]);
+    }
+    layers[layer].push(dummy_index);
+    known_node_indices.insert(dummy_id.to_string(), dummy_index);
+}
+
+fn first_segment_label(edge: &Edge, segment_source: &str) -> Option<String> {
+    if segment_source == edge.source {
+        edge.label.clone()
+    } else {
+        None
+    }
+}
 
 fn order_layers(
     layers: &[Vec<usize>],
     graph: &Graph,
-    id_to_idx: &HashMap<String, usize>,
+    node_indices_by_id: &HashMap<String, usize>,
 ) -> Vec<Vec<usize>> {
     if layers.is_empty() {
         return vec![];
     }
 
-    let n = graph.nodes.len();
+    let adjacency = build_adjacency(graph, node_indices_by_id);
+    let neighbors = LayerNeighbors {
+        parents_by_node: parents_by_node(&adjacency.children_by_node),
+        children_by_node: adjacency.children_by_node,
+    };
+    let mut ordered_layers = layers.to_vec();
+    let mut position_by_node = positions_by_node(&ordered_layers, graph.nodes.len());
 
-    // Build adjacency for cross-layer neighbours.
-    let mut children: Vec<Vec<usize>> = vec![vec![]; n];
-    let mut parents: Vec<Vec<usize>> = vec![vec![]; n];
-    for edge in &graph.edges {
-        if let (Some(&src), Some(&tgt)) = (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
-        {
-            children[src].push(tgt);
-            parents[tgt].push(src);
-        }
+    for _ in 0..BARYCENTER_SWEEPS {
+        sweep_layers_down(&mut ordered_layers, &mut position_by_node, &neighbors);
+        sweep_layers_up(&mut ordered_layers, &mut position_by_node, &neighbors);
     }
 
-    // Start with the insertion order.
-    let mut ordered: Vec<Vec<usize>> = layers.to_vec();
-
-    // Position lookup: pos_in_layer[node_idx] = position within its layer.
-    let mut pos_in_layer: Vec<usize> = vec![0; n];
-    for layer in &ordered {
-        for (pos, &node) in layer.iter().enumerate() {
-            pos_in_layer[node] = pos;
-        }
-    }
-
-    // Run a few sweeps of the barycenter heuristic.
-    let sweeps = 4;
-    for _sweep in 0..sweeps {
-        // Forward sweep (top → bottom).
-        for li in 1..ordered.len() {
-            let mut barycenters: Vec<(usize, f64)> = ordered[li]
-                .iter()
-                .map(|&node| {
-                    let parent_positions: Vec<f64> = parents[node]
-                        .iter()
-                        .map(|&p| pos_in_layer[p] as f64)
-                        .collect();
-                    let bc = if parent_positions.is_empty() {
-                        pos_in_layer[node] as f64
-                    } else {
-                        parent_positions.iter().sum::<f64>() / parent_positions.len() as f64
-                    };
-                    (node, bc)
-                })
-                .collect();
-            barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            ordered[li] = barycenters.iter().map(|&(node, _)| node).collect();
-            for (pos, &node) in ordered[li].iter().enumerate() {
-                pos_in_layer[node] = pos;
-            }
-        }
-
-        // Backward sweep (bottom → top).
-        for li in (0..ordered.len().saturating_sub(1)).rev() {
-            let mut barycenters: Vec<(usize, f64)> = ordered[li]
-                .iter()
-                .map(|&node| {
-                    let child_positions: Vec<f64> = children[node]
-                        .iter()
-                        .map(|&c| pos_in_layer[c] as f64)
-                        .collect();
-                    let bc = if child_positions.is_empty() {
-                        pos_in_layer[node] as f64
-                    } else {
-                        child_positions.iter().sum::<f64>() / child_positions.len() as f64
-                    };
-                    (node, bc)
-                })
-                .collect();
-            barycenters.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-            ordered[li] = barycenters.iter().map(|&(node, _)| node).collect();
-            for (pos, &node) in ordered[li].iter().enumerate() {
-                pos_in_layer[node] = pos;
-            }
-        }
-    }
-
-    ordered
+    ordered_layers
 }
 
-// ── Step 4: coordinate assignment ───────────────────────────────────────────
+#[derive(Debug, Clone)]
+struct LayerNeighbors {
+    parents_by_node: Vec<Vec<usize>>,
+    children_by_node: Vec<Vec<usize>>,
+}
 
-fn assign_positions(graph: &mut Graph, layers: &[Vec<usize>], _id_to_idx: &HashMap<String, usize>) {
+fn positions_by_node(layers: &[Vec<usize>], node_count: usize) -> Vec<usize> {
+    let mut position_by_node = vec![0; node_count];
+    for layer in layers {
+        refresh_positions_for_layer(layer, &mut position_by_node);
+    }
+    position_by_node
+}
+
+fn sweep_layers_down(
+    layers: &mut [Vec<usize>],
+    position_by_node: &mut [usize],
+    neighbors: &LayerNeighbors,
+) {
+    for layer_index in 1..layers.len() {
+        layers[layer_index] = reorder_layer_by_barycenter(
+            &layers[layer_index],
+            &neighbors.parents_by_node,
+            position_by_node,
+        );
+        refresh_positions_for_layer(&layers[layer_index], position_by_node);
+    }
+}
+
+fn sweep_layers_up(
+    layers: &mut [Vec<usize>],
+    position_by_node: &mut [usize],
+    neighbors: &LayerNeighbors,
+) {
+    for layer_index in (0..layers.len().saturating_sub(1)).rev() {
+        layers[layer_index] = reorder_layer_by_barycenter(
+            &layers[layer_index],
+            &neighbors.children_by_node,
+            position_by_node,
+        );
+        refresh_positions_for_layer(&layers[layer_index], position_by_node);
+    }
+}
+
+fn reorder_layer_by_barycenter(
+    layer: &[usize],
+    neighbors_by_node: &[Vec<usize>],
+    position_by_node: &[usize],
+) -> Vec<usize> {
+    let mut weighted_nodes: Vec<(usize, f64)> = layer
+        .iter()
+        .map(|&node_index| {
+            (
+                node_index,
+                barycenter(node_index, &neighbors_by_node[node_index], position_by_node),
+            )
+        })
+        .collect();
+
+    weighted_nodes.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    weighted_nodes
+        .into_iter()
+        .map(|(node_index, _)| node_index)
+        .collect()
+}
+
+fn barycenter(node_index: usize, neighbors: &[usize], position_by_node: &[usize]) -> f64 {
+    if neighbors.is_empty() {
+        return position_by_node[node_index] as f64;
+    }
+
+    neighbors
+        .iter()
+        .map(|&neighbor_index| position_by_node[neighbor_index] as f64)
+        .sum::<f64>()
+        / neighbors.len() as f64
+}
+
+fn refresh_positions_for_layer(layer: &[usize], position_by_node: &mut [usize]) {
+    for (position, &node_index) in layer.iter().enumerate() {
+        position_by_node[node_index] = position;
+    }
+}
+
+fn assign_positions(graph: &mut Graph, layers: &[Vec<usize>]) {
     if layers.is_empty() {
         return;
     }
 
-    let is_lr = graph.direction == Direction::LeftRight;
+    let left_to_right = graph.direction == Direction::LeftRight;
+    let node_sizes = layout_sizes(&graph.nodes);
+    let layer_cross_spans = layer_cross_spans(layers, &node_sizes, left_to_right);
+    let max_cross_span = layer_cross_spans.iter().copied().fold(0.0_f64, f64::max);
+    let mut main_cursor = 0.0;
 
-    // For each layer, compute the total width (or height in LR mode) so we
-    // can centre nodes.
-    // Pre-read sizes out so we don't borrow graph mutably while reading.
-    let sizes: Vec<(f64, f64)> = graph
-        .nodes
-        .iter()
-        .map(|n| {
-            if n.id.starts_with("__dummy") {
-                (0.0, 0.0) // Dummy nodes take 0 height/width so they don't break Y offsets
-            } else {
-                (n.width.unwrap_or(MIN_WIDTH), n.height.unwrap_or(MIN_HEIGHT))
-            }
-        })
-        .collect();
+    for (layer_index, layer) in layers.iter().enumerate() {
+        let layer_main_extent = layer_main_extent(layer, &node_sizes, left_to_right);
+        let mut cross_cursor = (max_cross_span - layer_cross_spans[layer_index]) / 2.0;
 
-    // For TopDown: layers are rows (y increases), within a row nodes are spread on x.
-    // For LeftRight: layers are columns (x increases), within a column nodes are spread on y.
+        for &node_index in layer {
+            let (x, y) = node_coordinates(
+                left_to_right,
+                main_cursor,
+                cross_cursor,
+                layer_main_extent,
+                is_dummy_node(&graph.nodes[node_index]),
+            );
 
-    // Compute per-layer span along the "cross axis" so we can centre.
-    let layer_spans: Vec<f64> = layers
-        .iter()
-        .map(|layer| {
-            let mut span = 0.0;
-            for (i, &node_idx) in layer.iter().enumerate() {
-                let (w, h) = sizes[node_idx];
-                span += if is_lr { h } else { w };
-                if i + 1 < layer.len() {
-                    span += SPACING_H;
-                }
-            }
-            span
-        })
-        .collect();
-
-    let max_cross_span = layer_spans.iter().copied().fold(0.0_f64, f64::max);
-
-    // Main-axis cursor.
-    let mut main_cursor: f64 = 0.0;
-
-    for (li, layer) in layers.iter().enumerate() {
-        // Centre this layer's nodes relative to the widest layer.
-        let cross_offset = (max_cross_span - layer_spans[li]) / 2.0;
-
-        // Max extent along the main axis in this layer (for advancing the cursor).
-        // Dummy route points are zero-sized, but they should sit in the middle of
-        // the layer lane rather than at the top/left edge; otherwise long edges
-        // can run flush along real node borders.
-        let max_main_extent = layer
-            .iter()
-            .map(|&node_idx| {
-                let (w, h) = sizes[node_idx];
-                if is_lr { w } else { h }
-            })
-            .fold(0.0_f64, f64::max);
-
-        let mut cross_cursor = cross_offset;
-
-        for &node_idx in layer {
-            let (w, h) = sizes[node_idx];
-            let is_dummy = graph.nodes[node_idx].id.starts_with("__dummy");
-
-            let (x, y) = if is_lr {
-                // main axis = x (layer index), cross axis = y
-                let x = if is_dummy {
-                    main_cursor + max_main_extent / 2.0
-                } else {
-                    main_cursor
-                };
-                (x, cross_cursor)
-            } else {
-                // main axis = y (layer index), cross axis = x
-                let y = if is_dummy {
-                    main_cursor + max_main_extent / 2.0
-                } else {
-                    main_cursor
-                };
-                (cross_cursor, y)
-            };
-
-            graph.nodes[node_idx].x = Some(x);
-            graph.nodes[node_idx].y = Some(y);
-
-            if is_lr {
-                cross_cursor += h + SPACING_H;
-            } else {
-                cross_cursor += w + SPACING_H;
-            }
+            graph.nodes[node_index].x = Some(x);
+            graph.nodes[node_index].y = Some(y);
+            cross_cursor +=
+                cross_axis_extent(node_sizes[node_index], left_to_right) + NODE_GAP_WITHIN_LAYER;
         }
 
-        main_cursor += max_main_extent + SPACING_V;
+        main_cursor += layer_main_extent + LAYER_GAP;
     }
 
-    align_long_edge_targets(graph, layers, is_lr);
+    align_lone_targets_after_dummy_routes(graph, layers, left_to_right);
 }
 
-/// When a long edge is split by a dummy route point, prefer placing a lone
-/// target under/after that route point. Otherwise a `B -> D` edge that skips
-/// over `C` gets averaged between `C -> D` and the dummy parent, causing the
-/// routed branch to swing right, down, and then back left in an ugly loop.
-fn align_long_edge_targets(graph: &mut Graph, layers: &[Vec<usize>], is_lr: bool) {
-    let id_to_idx: HashMap<String, usize> = graph
-        .nodes
+#[derive(Debug, Clone, Copy)]
+struct CellSize {
+    width: f64,
+    height: f64,
+}
+
+fn layout_sizes(nodes: &[Node]) -> Vec<CellSize> {
+    nodes.iter().map(layout_size).collect()
+}
+
+fn layout_size(node: &Node) -> CellSize {
+    if is_dummy_node(node) {
+        return CellSize {
+            width: 0.0,
+            height: 0.0,
+        };
+    }
+
+    CellSize {
+        width: node.width.unwrap_or(MIN_NODE_WIDTH),
+        height: node.height.unwrap_or(MIN_NODE_HEIGHT),
+    }
+}
+
+fn layer_cross_spans(
+    layers: &[Vec<usize>],
+    node_sizes: &[CellSize],
+    left_to_right: bool,
+) -> Vec<f64> {
+    layers
+        .iter()
+        .map(|layer| layer_cross_span(layer, node_sizes, left_to_right))
+        .collect()
+}
+
+fn layer_cross_span(layer: &[usize], node_sizes: &[CellSize], left_to_right: bool) -> f64 {
+    layer
         .iter()
         .enumerate()
-        .map(|(i, n)| (n.id.clone(), i))
-        .collect();
+        .map(|(position, &node_index)| {
+            let gap = if position + 1 < layer.len() {
+                NODE_GAP_WITHIN_LAYER
+            } else {
+                0.0
+            };
+            cross_axis_extent(node_sizes[node_index], left_to_right) + gap
+        })
+        .sum()
+}
 
-    let mut layer_of = HashMap::new();
-    for (li, layer) in layers.iter().enumerate() {
-        for &idx in layer {
-            layer_of.insert(idx, li);
-        }
-    }
+fn layer_main_extent(layer: &[usize], node_sizes: &[CellSize], left_to_right: bool) -> f64 {
+    layer
+        .iter()
+        .map(|&node_index| main_axis_extent(node_sizes[node_index], left_to_right))
+        .fold(0.0_f64, f64::max)
+}
 
-    for edge in &graph.edges {
-        if !edge.source.starts_with("__dummy") {
-            continue;
-        }
-        let (Some(&dummy_idx), Some(&target_idx)) =
-            (id_to_idx.get(&edge.source), id_to_idx.get(&edge.target))
-        else {
-            continue;
-        };
-        if graph.nodes[target_idx].id.starts_with("__dummy") {
-            continue;
-        }
-
-        let Some(&target_layer) = layer_of.get(&target_idx) else {
-            continue;
-        };
-        let visible_count = layers[target_layer]
-            .iter()
-            .filter(|&&idx| !graph.nodes[idx].id.starts_with("__dummy"))
-            .count();
-        if visible_count != 1 {
-            continue;
-        }
-
-        if is_lr {
-            if let (Some(dummy_y), Some(target_h)) =
-                (graph.nodes[dummy_idx].y, graph.nodes[target_idx].height)
-            {
-                graph.nodes[target_idx].y = Some((dummy_y - target_h / 2.0).max(0.0));
-            }
-        } else if let (Some(dummy_x), Some(target_w)) =
-            (graph.nodes[dummy_idx].x, graph.nodes[target_idx].width)
-        {
-            graph.nodes[target_idx].x = Some((dummy_x - target_w / 2.0).max(0.0));
-        }
+fn main_axis_extent(size: CellSize, left_to_right: bool) -> f64 {
+    if left_to_right {
+        size.width
+    } else {
+        size.height
     }
 }
 
-// ── Step 5: group bounds ───────────────────────────────────────────────────
+fn cross_axis_extent(size: CellSize, left_to_right: bool) -> f64 {
+    if left_to_right {
+        size.height
+    } else {
+        size.width
+    }
+}
+
+fn node_coordinates(
+    left_to_right: bool,
+    main_cursor: f64,
+    cross_cursor: f64,
+    layer_main_extent: f64,
+    is_dummy: bool,
+) -> (f64, f64) {
+    let main_position = if is_dummy {
+        main_cursor + layer_main_extent / 2.0
+    } else {
+        main_cursor
+    };
+
+    if left_to_right {
+        (main_position, cross_cursor)
+    } else {
+        (cross_cursor, main_position)
+    }
+}
+
+fn align_lone_targets_after_dummy_routes(
+    graph: &mut Graph,
+    layers: &[Vec<usize>],
+    left_to_right: bool,
+) {
+    let node_indices = node_indices_by_id(&graph.nodes);
+    let layer_by_node = layer_by_node_index(layers);
+
+    let edges = graph.edges.clone();
+    for edge in &edges {
+        if !is_dummy_id(&edge.source) {
+            continue;
+        }
+
+        let (Some(&dummy_index), Some(&target_index)) = (
+            node_indices.get(&edge.source),
+            node_indices.get(&edge.target),
+        ) else {
+            continue;
+        };
+
+        if is_dummy_node(&graph.nodes[target_index]) {
+            continue;
+        }
+
+        let Some(&target_layer) = layer_by_node.get(&target_index) else {
+            continue;
+        };
+
+        if visible_node_count(&graph.nodes, &layers[target_layer]) != 1 {
+            continue;
+        }
+
+        align_target_with_dummy(graph, dummy_index, target_index, left_to_right);
+    }
+}
+
+fn visible_node_count(nodes: &[Node], layer: &[usize]) -> usize {
+    layer
+        .iter()
+        .filter(|&&node_index| !is_dummy_node(&nodes[node_index]))
+        .count()
+}
+
+fn align_target_with_dummy(
+    graph: &mut Graph,
+    dummy_index: usize,
+    target_index: usize,
+    left_to_right: bool,
+) {
+    if left_to_right {
+        if let (Some(dummy_y), Some(target_height)) =
+            (graph.nodes[dummy_index].y, graph.nodes[target_index].height)
+        {
+            graph.nodes[target_index].y = Some((dummy_y - target_height / 2.0).max(0.0));
+        }
+    } else if let (Some(dummy_x), Some(target_width)) =
+        (graph.nodes[dummy_index].x, graph.nodes[target_index].width)
+    {
+        graph.nodes[target_index].x = Some((dummy_x - target_width / 2.0).max(0.0));
+    }
+}
 
 fn assign_group_bounds(graph: &mut Graph) {
     if graph.groups.is_empty() {
@@ -583,12 +653,9 @@ fn assign_group_bounds(graph: &mut Graph) {
     let node_by_id: HashMap<String, &Node> = graph
         .nodes
         .iter()
-        .filter(|node| !node.id.starts_with("__dummy"))
+        .filter(|node| !is_dummy_node(node))
         .map(|node| (node.id.clone(), node))
         .collect();
-
-    const GROUP_PADDING_X: f64 = 2.0;
-    const GROUP_PADDING_Y: f64 = 1.0;
 
     for group in &mut graph.groups {
         let mut min_x = f64::INFINITY;
@@ -623,25 +690,18 @@ fn assign_group_bounds(graph: &mut Graph) {
     }
 }
 
-// ── Step 6: route metadata ─────────────────────────────────────────────────
-
 fn assign_route_plans(graph: &mut Graph) {
     let node_by_id: HashMap<String, Node> = graph
         .nodes
         .iter()
         .map(|node| (node.id.clone(), node.clone()))
         .collect();
-    let id_to_idx: HashMap<String, usize> = graph
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(idx, node)| (node.id.clone(), idx))
-        .collect();
+    let node_indices = node_indices_by_id(&graph.nodes);
 
     let classes: Vec<EdgeClass> = graph
         .edges
         .iter()
-        .map(|edge| classify_edge(edge, &node_by_id, &id_to_idx, &graph.direction))
+        .map(|edge| classify_edge(edge, &node_by_id, &node_indices, &graph.direction))
         .collect();
 
     let mut source_keys = Vec::with_capacity(graph.edges.len());
@@ -754,7 +814,7 @@ struct GraphPerimeter {
 fn graph_perimeter(nodes: &[Node]) -> GraphPerimeter {
     let mut perimeter = GraphPerimeter::default();
     for node in nodes {
-        if node.id.starts_with("__dummy") {
+        if is_dummy_node(node) {
             continue;
         }
         if let (Some(x), Some(y), Some(w), Some(h)) = (node.x, node.y, node.width, node.height) {
@@ -810,8 +870,8 @@ impl LaneAllocator {
     ) -> ReservedLane {
         let rank = self.perimeter_counts.entry(direction.clone()).or_insert(0);
         let coord = match direction {
-            Direction::TopDown => perimeter.max_x + SPACING_H + *rank as f64,
-            Direction::LeftRight => perimeter.max_y + SPACING_V + *rank as f64,
+            Direction::TopDown => perimeter.max_x + NODE_GAP_WITHIN_LAYER + *rank as f64,
+            Direction::LeftRight => perimeter.max_y + LAYER_GAP + *rank as f64,
         };
         *rank += 1;
         let id = self.alloc_id();
@@ -860,53 +920,37 @@ fn detect_bundles(
 
     let mut bundles = HashMap::new();
     for node in &graph.nodes {
-        let in_degree = incoming.get(&node.id).copied().unwrap_or(0);
-        let out_degree = outgoing.get(&node.id).copied().unwrap_or(0);
+        let incoming_count = incoming.get(&node.id).copied().unwrap_or(0);
+        let outgoing_count = outgoing.get(&node.id).copied().unwrap_or(0);
         let semantic_bus = is_semantic_bus_endpoint(node);
 
-        // High fan-in sinks are the common "success/logs/metrics" wall in architecture
-        // diagrams, so bundle them even when the label is not explicitly observability-ish.
-        if in_degree >= 4 {
-            let key = (node.id.clone(), BundleKind::SharedSink);
-            bundles.insert(
-                key.clone(),
-                BundleAssignment {
-                    key,
-                    kind: BundleKind::SharedSink,
-                },
-            );
+        if incoming_count >= SHARED_SINK_BUNDLE_MIN_DEGREE {
+            insert_bundle(&mut bundles, node.id.clone(), BundleKind::SharedSink);
         }
 
-        // Fan-out from ordinary routers is often the main content and should keep separate
-        // lanes. Only collapse source trunks for semantic bus/queue/telemetry endpoints.
-        if out_degree >= 4 && semantic_bus {
-            let key = (node.id.clone(), BundleKind::SharedSource);
-            bundles.insert(
-                key.clone(),
-                BundleAssignment {
-                    key,
-                    kind: BundleKind::SharedSource,
-                },
-            );
+        if outgoing_count >= SHARED_SOURCE_BUNDLE_MIN_DEGREE && semantic_bus {
+            insert_bundle(&mut bundles, node.id.clone(), BundleKind::SharedSource);
         }
     }
 
-    // Also recognize semantic endpoints that were introduced as dummy-free parsed nodes but
-    // have no matching node entry for some reason.
-    for (id, degree) in incoming {
-        if degree >= 4 && nodes.get(&id).is_some_and(is_semantic_bus_endpoint) {
-            let key = (id, BundleKind::SharedSink);
-            bundles.insert(
-                key.clone(),
-                BundleAssignment {
-                    key,
-                    kind: BundleKind::SharedSink,
-                },
-            );
+    for (id, incoming_count) in incoming {
+        if incoming_count >= SHARED_SINK_BUNDLE_MIN_DEGREE
+            && nodes.get(&id).is_some_and(is_semantic_bus_endpoint)
+        {
+            insert_bundle(&mut bundles, id, BundleKind::SharedSink);
         }
     }
 
     bundles
+}
+
+fn insert_bundle(
+    bundles: &mut HashMap<(String, BundleKind), BundleAssignment>,
+    node_id: String,
+    kind: BundleKind,
+) {
+    let key = (node_id, kind);
+    bundles.insert(key.clone(), BundleAssignment { key, kind });
 }
 
 fn bundle_for_edge(
@@ -1040,7 +1084,6 @@ fn should_route_telemetry_on_perimeter(
     edge: &Edge,
     telemetry_degrees: &HashMap<String, usize>,
 ) -> bool {
-    const PERIMETER_TELEMETRY_DEGREE: usize = 3;
     telemetry_degrees
         .get(&edge.source)
         .copied()
@@ -1137,8 +1180,8 @@ fn port_offsets(keys: &[(String, PortSide)]) -> Vec<f64> {
 fn make_port(node: &Node, side: PortSide, offset: f64) -> Port {
     let x = node.x.unwrap_or(0.0);
     let y = node.y.unwrap_or(0.0);
-    let w = node.width.unwrap_or(MIN_WIDTH);
-    let h = node.height.unwrap_or(MIN_HEIGHT);
+    let w = node.width.unwrap_or(MIN_NODE_WIDTH);
+    let h = node.height.unwrap_or(MIN_NODE_HEIGHT);
     let (px, py) = match side {
         PortSide::Top => (x + w * offset, y - 1.0),
         PortSide::Right => (x + w, y + h * offset),
@@ -1238,35 +1281,42 @@ fn route_label_anchor(label: Option<&str>, points: &[RoutePoint]) -> Option<Rout
         return Some(first.clone());
     }
 
-    let mut best_anchor = first.clone();
-    let mut best_len = -1.0_f64;
-    let mut best_is_vertical = false;
+    let (mut anchor, is_vertical) = longest_segment_anchor(points);
+    if is_vertical {
+        shift_vertical_label_anchor(&mut anchor, label);
+    }
+
+    Some(anchor)
+}
+
+fn longest_segment_anchor(points: &[RoutePoint]) -> (RoutePoint, bool) {
+    let mut anchor = points[0].clone();
+    let mut length = -1.0_f64;
+    let mut is_vertical = false;
+
     for segment in points.windows(2) {
         let a = &segment[0];
         let b = &segment[1];
         let dx = (a.x - b.x).abs();
         let dy = (a.y - b.y).abs();
-        let len = dx + dy;
-        if len > best_len {
-            best_len = len;
-            best_is_vertical = dy > dx;
-            best_anchor = RoutePoint {
+        let segment_length = dx + dy;
+
+        if segment_length > length {
+            length = segment_length;
+            is_vertical = dy > dx;
+            anchor = RoutePoint {
                 x: (a.x + b.x) / 2.0,
                 y: (a.y + b.y) / 2.0,
             };
         }
     }
 
-    // The renderer places labels by centering them horizontally on the anchor and
-    // drawing one row above it. For vertical route segments, shift the anchor so
-    // the rendered label sits beside the line in the open gap instead of on top
-    // of the line or card shadow.
-    if best_is_vertical {
-        if let Some(label) = label {
-            best_anchor.x += 1.0 + label.chars().count() as f64 / 2.0;
-            best_anchor.y += 1.0;
-        }
-    }
+    (anchor, is_vertical)
+}
 
-    Some(best_anchor)
+fn shift_vertical_label_anchor(anchor: &mut RoutePoint, label: Option<&str>) {
+    if let Some(label) = label {
+        anchor.x += 1.0 + label.chars().count() as f64 / 2.0;
+        anchor.y += 1.0;
+    }
 }

@@ -2,8 +2,6 @@ use diaview::model::*;
 use diaview::parser::mermaid::parse;
 use diaview::testdata::fixtures;
 
-// ── Fixture-based tests ──────────────────────────────────────────────
-
 #[test]
 fn test_simple_two_node_fixture() {
     let input = r#"
@@ -53,10 +51,6 @@ fn test_subgraphs_parse_groups_and_members() {
 
 #[test]
 fn test_left_right_chain_fixture() {
-    // The fixture expects Dotted+Open on the second edge, which isn't a
-    // standard Mermaid operator. We verify the parser produces the
-    // correct structure for what *is* parseable and compare the rest
-    // manually.
     let input = r#"
         graph LR
         A[Input] --> B(Process)
@@ -68,16 +62,12 @@ fn test_left_right_chain_fixture() {
     assert_eq!(graph.nodes, expected.nodes);
     assert_eq!(graph.edges.len(), expected.edges.len());
     assert_eq!(graph.edges[0], expected.edges[0]);
-    // Second edge: parser produces Dashed (-.->), fixture has Dotted.
-    // Verify source/target/label match; style differs by design.
     assert_eq!(graph.edges[1].source, expected.edges[1].source);
     assert_eq!(graph.edges[1].target, expected.edges[1].target);
     assert_eq!(graph.edges[1].label, expected.edges[1].label);
     assert_eq!(graph.edges[1].style, EdgeStyle::Dashed);
     assert_eq!(graph.edges[1].arrowhead, Arrowhead::Normal);
 }
-
-// ── Direction ────────────────────────────────────────────────────────
 
 #[test]
 fn test_graph_td() {
@@ -108,8 +98,6 @@ fn test_flowchart_lr() {
     let g = parse("flowchart LR\nA --> B").unwrap();
     assert_eq!(g.direction, Direction::LeftRight);
 }
-
-// ── Node shapes ─────────────────────────────────────────────────────
 
 #[test]
 fn test_rectangle_node() {
@@ -167,8 +155,6 @@ fn test_all_four_shapes_in_one() {
     assert_eq!(g.nodes[3].shape, NodeShape::Circle);
 }
 
-// ── Edge styles ─────────────────────────────────────────────────────
-
 #[test]
 fn test_solid_arrow() {
     let g = parse("graph TD\nA --> B").unwrap();
@@ -216,8 +202,6 @@ fn test_thick_arrow() {
     assert_eq!(g.edges[0].arrowhead, Arrowhead::Normal);
 }
 
-// ── Edge labels ─────────────────────────────────────────────────────
-
 #[test]
 fn test_pipe_label() {
     let g = parse("graph TD\nA -->|yes| B").unwrap();
@@ -245,8 +229,6 @@ fn test_no_label() {
     assert_eq!(g.edges[0].label, None);
 }
 
-// ── Comments ────────────────────────────────────────────────────────
-
 #[test]
 fn test_comments_ignored() {
     let input = "\
@@ -260,8 +242,6 @@ A --> B
     assert_eq!(g.edges.len(), 1);
 }
 
-// ── Semicolons ──────────────────────────────────────────────────────
-
 #[test]
 fn test_semicolons() {
     let input = "graph TD\nA --> B; B --> C";
@@ -269,8 +249,6 @@ fn test_semicolons() {
     assert_eq!(g.edges.len(), 2);
     assert_eq!(g.nodes.len(), 3);
 }
-
-// ── Multi-line ──────────────────────────────────────────────────────
 
 #[test]
 fn test_multiline() {
@@ -287,8 +265,6 @@ B --> C[End]
     assert_eq!(g.nodes[2].label, "End");
 }
 
-// ── Node deduplication ──────────────────────────────────────────────
-
 #[test]
 fn test_node_dedup() {
     let input = "graph TD\nA[Hello] --> B\nA --> B";
@@ -303,12 +279,9 @@ fn test_bare_then_declared() {
     let input = "graph TD\nA --> B\nB[World]";
     let g = parse(input).unwrap();
     assert_eq!(g.nodes.len(), 2);
-    // B should get updated from bare to declared
     assert_eq!(g.nodes[1].label, "World");
     assert_eq!(g.nodes[1].shape, NodeShape::Rectangle);
 }
-
-// ── Positions are None ──────────────────────────────────────────────
 
 #[test]
 fn test_positions_none() {
@@ -320,8 +293,6 @@ fn test_positions_none() {
         assert_eq!(n.height, None);
     }
 }
-
-// ── Error cases ─────────────────────────────────────────────────────
 
 #[test]
 fn test_empty_input() {

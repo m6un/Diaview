@@ -1,8 +1,6 @@
-/// Test helpers and sample Mermaid diagrams.
 pub mod fixtures {
     use crate::model::*;
 
-    /// A simple 2-node linear graph: A("Start") --> B("End")
     pub fn simple_two_node() -> Graph {
         Graph {
             direction: Direction::TopDown,
@@ -38,7 +36,6 @@ pub mod fixtures {
         }
     }
 
-    /// A diamond decision graph: A --> B{Decision} -->|yes| C, -->|no| D
     pub fn diamond_decision() -> Graph {
         Graph {
             direction: Direction::TopDown,
@@ -110,14 +107,11 @@ pub mod fixtures {
         }
     }
 
-    /// Medium-complexity demo graph intended for regular visual inspection.
     pub const SIMPLE_MERMAID: &str = include_str!("../fixtures/simple.mmd");
 
-    /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
     pub const COMPLEX_ARCHITECTURE_MERMAID: &str =
         include_str!("../fixtures/complex_architecture.mmd");
 
-    /// Many producers converging on one terminal sink.
     pub const PHASE15_FAN_IN_SINK_MERMAID: &str = r#"
 flowchart TD
     START([Request]) --> AUTH[Authenticate]
@@ -133,7 +127,6 @@ flowchart TD
     NOTIFY[Notifier] --> SUCCESS
 "#;
 
-    /// One router distributing work to many downstream services.
     pub const PHASE15_FAN_OUT_ROUTER_MERMAID: &str = r#"
 flowchart LR
     ENTRY([Ingress]) --> ROUTER{Route request}
@@ -151,7 +144,6 @@ flowchart LR
     EMAIL --> DONE
 "#;
 
-    /// Mostly-forward graph with an explicit back edge to exercise cycle-ish ordering.
     pub const PHASE15_BACK_EDGE_CYCLE_MERMAID: &str = r#"
 flowchart TD
     PLAN[Plan job] --> FETCH[Fetch data]
@@ -164,7 +156,6 @@ flowchart TD
     STORE -.-> VALIDATE
 "#;
 
-    /// Small Temporal/Stripe payment orchestration graph with cyclic return paths.
     pub const TEMPORAL_STRIPE_PAYMENT_MERMAID: &str = r#"
 flowchart TD
     CLIENT[Client] -->|POST /payments| API[Payments API]
@@ -176,7 +167,6 @@ flowchart TD
     WORKFLOW -->|final status| API
 "#;
 
-    /// Primary request path overlaid with dashed telemetry edges into shared observability sinks.
     pub const PHASE15_TELEMETRY_OVERLAY_MERMAID: &str = r#"
 flowchart LR
     CLIENT([Client]) --> EDGE[Edge]
@@ -195,7 +185,6 @@ flowchart LR
     METRICS --> ALERTS[Alerts]
 "#;
 
-    /// Subgraph-like architecture fixture: grouped by label prefixes because group IR is future work.
     pub const PHASE15_GROUPED_ARCHITECTURE_MERMAID: &str = r#"
 flowchart TD
     CLIENT_WEB[Client / Web] --> EDGE_CDN[Edge / CDN]
@@ -218,12 +207,10 @@ flowchart TD
     OBS_METRICS --> EXT_PAGER[External / Pager]
 "#;
 
-    /// Medium-complexity demo graph intended for regular visual inspection.
     pub fn simple_mermaid() -> &'static str {
         SIMPLE_MERMAID
     }
 
-    /// A larger real-world architecture flowchart used for Phase 1.5 layout/routing inspection.
     pub fn complex_architecture_mermaid() -> &'static str {
         COMPLEX_ARCHITECTURE_MERMAID
     }
@@ -252,7 +239,6 @@ flowchart TD
         PHASE15_GROUPED_ARCHITECTURE_MERMAID
     }
 
-    /// Left-right direction, 3 nodes in a chain
     pub fn left_right_chain() -> Graph {
         Graph {
             direction: Direction::LeftRight,
