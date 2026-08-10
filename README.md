@@ -1,6 +1,6 @@
 # Diaview
 
-A terminal-native diagram renderer for Mermaid flowcharts. It parses diagrams into a graph model, lays them out in Rust, and renders polished Ratatui output inline or fullscreen.
+A terminal-native diagram renderer for developers. It parses diagrams into a graph model, lays them out in Rust, and renders polished Ratatui output inline or fullscreen.
 
 ## What this repo is
 
