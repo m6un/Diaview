@@ -10,13 +10,14 @@ Current capabilities include:
 
 - Mermaid flowchart parsing
 - Mermaid `subgraph` parsing into Graph IR groups
-- database/cylinder syntax `A[(label)]`, normalized to rectangle rendering
+- database/cylinder syntax `A[(label)]` as a dedicated database node
+- Nerd Font artifact icons inferred from node ids and labels
 - layered layout with dummy nodes for long edges
 - layout-owned route metadata with ports, lanes, edge classes, and label anchors
 - shared sink/source bundling
 - telemetry/error/back-edge/external edge classification
 - perimeter routing for cyclic/back-edge workflows
-- Ayu Dark-inspired terminal rendering
+- neutral dark terminal theme with blue semantic accents
 - inline ANSI rendering via `--inline`
 - integration tests for parser, layout, renderer, and fixtures
 

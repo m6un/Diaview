@@ -19,7 +19,7 @@ The foundation — parse Mermaid, lay out nodes, render beautifully to the termi
 - [x] **Model IR** — `Graph`, `Node`, `Edge` types with layout fields as `Option<f64>`
 - [x] **Mermaid Parser** — `graph TD/TB/LR`, `flowchart TD/LR`, common node shapes, edge styles, labels, comments, semicolons
 - [x] **Layout Engine** — topological layering, barycenter ordering, aspect-ratio-aware sizing, dummy nodes for long-edge routing
-- [x] **Terminal Renderer** — Ratatui rendering, 24-bit ANSI colors, filled cards, shadows, orthogonal edges, arrowheads, labels
+- [x] **Terminal Renderer** — Ratatui rendering, 24-bit ANSI colors, filled cards, Nerd Font artifact icons, shadows, orthogonal edges, arrowheads, labels
 - [x] **Inline mode** — `--inline` renders ANSI output to scrollback without alternate screen/raw mode
 
 ### Node shapes
@@ -30,7 +30,7 @@ The foundation — parse Mermaid, lay out nodes, render beautifully to the termi
 | `A(text)` | Rounded rect | filled card |
 | `A{text}` | Diamond | decision card with `◆` icon |
 | `A((text))` | Circle | semantic card with `●` icon |
-| `A[(text)]` | Rectangle | database/cylinder syntax normalized to rectangle for now |
+| `A[(text)]` | Database | database card with a Nerd Font database icon |
 
 ### Edge styles
 
@@ -183,7 +183,7 @@ Still planned:
 
 ### 5.1 Theming
 
-- [x] Static Ayu Dark default theme
+- [x] Static neutral dark default theme with blue semantic accents
 - [ ] Catppuccin, Dracula, Nord built-in themes
 - [ ] Theme config file, e.g. `~/.config/diaview/theme.toml`
 - [ ] Semantic coloring controls beyond the current edge-class styling

@@ -129,10 +129,10 @@ fn test_circle_node() {
 }
 
 #[test]
-fn test_database_cylinder_node_maps_to_rectangle() {
+fn test_database_cylinder_node_maps_to_database_shape() {
     let g = parse("graph TD\nDB[(Payment DB)]").unwrap();
     assert_eq!(g.nodes[0].id, "DB");
-    assert_eq!(g.nodes[0].shape, NodeShape::Rectangle);
+    assert_eq!(g.nodes[0].shape, NodeShape::Database);
     assert_eq!(g.nodes[0].label, "Payment DB");
 }
 
@@ -170,7 +170,7 @@ fn test_edge_to_database_cylinder_node() {
     assert_eq!(g.edges[0].source, "A");
     assert_eq!(g.edges[0].target, "DB");
     assert_eq!(g.nodes[1].id, "DB");
-    assert_eq!(g.nodes[1].shape, NodeShape::Rectangle);
+    assert_eq!(g.nodes[1].shape, NodeShape::Database);
     assert_eq!(g.nodes[1].label, "Payment DB");
 }
 

@@ -17,6 +17,7 @@ use ratatui::{
 use crate::model::{
     Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape, PortSide, RoutePlan,
 };
+use crate::stencil::{ArtifactKind, NodeStencil, stencil_for_node};
 use crate::theme::{NodeTheme, Theme};
 
 pub fn render(graph: &Graph) -> io::Result<()> {
@@ -27,7 +28,7 @@ pub fn render(graph: &Graph) -> io::Result<()> {
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
 
-    terminal.draw(|frame| render_to_frame(graph, frame))?;
+    terminal.draw(|frame| render_centered_to_frame(graph, frame))?;
 
     loop {
         if let Event::Key(key) = event::read()? {
@@ -198,10 +199,65 @@ pub fn render_to_frame(graph: &Graph, frame: &mut Frame) {
 
 pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
+    if area.width > 0 && area.height > 0 {
+        render_graph(graph, frame, area, theme);
+    }
+}
+
+pub fn render_centered_to_frame(graph: &Graph, frame: &mut Frame) {
+    let theme = Theme::default();
+    render_centered_to_frame_with_theme(graph, frame, &theme);
+}
+
+pub fn render_centered_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
     if area.width == 0 || area.height == 0 {
         return;
     }
 
+    let (graph_width, graph_height) = graph_bounds(graph);
+    let offset_x = area.x + area.width.saturating_sub(graph_width) / 2;
+    let offset_y = area.y + area.height.saturating_sub(graph_height) / 2;
+
+    if offset_x == 0 && offset_y == 0 {
+        render_graph(graph, frame, area, theme);
+    } else {
+        let mut centered = graph.clone();
+        translate_graph(&mut centered, offset_x as f64, offset_y as f64);
+        render_graph(&centered, frame, area, theme);
+    }
+}
+
+fn translate_graph(graph: &mut Graph, offset_x: f64, offset_y: f64) {
+    for node in &mut graph.nodes {
+        node.x = node.x.map(|x| x + offset_x);
+        node.y = node.y.map(|y| y + offset_y);
+    }
+
+    for group in &mut graph.groups {
+        group.x = group.x.map(|x| x + offset_x);
+        group.y = group.y.map(|y| y + offset_y);
+    }
+
+    for edge in &mut graph.edges {
+        if let Some(route) = &mut edge.route {
+            for point in &mut route.points {
+                point.x += offset_x;
+                point.y += offset_y;
+            }
+            route.source_port.x += offset_x;
+            route.source_port.y += offset_y;
+            route.target_port.x += offset_x;
+            route.target_port.y += offset_y;
+            if let Some(anchor) = &mut route.label_anchor {
+                anchor.x += offset_x;
+                anchor.y += offset_y;
+            }
+        }
+    }
+}
+
+fn render_graph(graph: &Graph, frame: &mut Frame, area: Rect, theme: &Theme) {
     for group in &graph.groups {
         render_group(group, frame, area, theme);
     }
@@ -309,13 +365,67 @@ fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
         _ => return,
     };
 
-    let node_theme = theme.node(&node.shape);
+    let stencil = stencil_for_node(node);
+    let node_theme = node_theme_for(node, stencil, theme);
     frame
         .buffer_mut()
         .set_style(rect, Style::default().bg(node_theme.fill));
 
-    let label = center_label(node, node_theme, rect);
+    let label = center_label(node, node_theme, stencil, rect);
     frame.render_widget(label, rect);
+}
+
+fn node_theme_for(node: &Node, stencil: NodeStencil, theme: &Theme) -> NodeTheme {
+    let base = theme.node(&node.shape);
+    match stencil.kind {
+        ArtifactKind::Generic => base,
+        ArtifactKind::Database => theme.database,
+        ArtifactKind::Security => artifact_node_theme(base, theme.accent_secondary),
+        ArtifactKind::Bucket
+        | ArtifactKind::Queue
+        | ArtifactKind::Event
+        | ArtifactKind::Function
+        | ArtifactKind::Worker
+        | ArtifactKind::Cache
+        | ArtifactKind::ApiGateway
+        | ArtifactKind::Observability
+        | ArtifactKind::External => artifact_node_theme(base, theme.accent_primary),
+    }
+}
+
+fn artifact_node_theme(base: NodeTheme, accent: Color) -> NodeTheme {
+    NodeTheme {
+        border: accent,
+        fill: base.fill,
+        text: base.text,
+        icon: accent,
+    }
+}
+
+fn stencil_icon_line<'a>(node: &'a Node, node_theme: NodeTheme, stencil: NodeStencil) -> Line<'a> {
+    Line::from(vec![
+        Span::styled(stencil.icon, Style::default().fg(node_theme.icon)),
+        Span::raw("  "),
+        Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
+    ])
+}
+
+fn shape_label_line<'a>(node: &'a Node, node_theme: NodeTheme) -> Line<'a> {
+    match node.shape {
+        NodeShape::Diamond => Line::from(vec![
+            Span::styled("◆", Style::default().fg(node_theme.icon)),
+            Span::raw(" "),
+            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
+        ]),
+        NodeShape::Circle => Line::from(vec![
+            Span::styled("●", Style::default().fg(node_theme.icon)),
+            Span::raw(" "),
+            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
+        ]),
+        NodeShape::Rectangle | NodeShape::RoundedRect | NodeShape::Database => Line::from(
+            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
+        ),
+    }
 }
 
 fn node_rect(node: &Node) -> Option<Rect> {
@@ -333,7 +443,12 @@ fn rect_inside(rect: Rect, area: Rect) -> bool {
         && rect.y.saturating_add(rect.height) <= area.y.saturating_add(area.height)
 }
 
-fn center_label(node: &Node, node_theme: NodeTheme, area: Rect) -> Paragraph<'_> {
+fn center_label(
+    node: &Node,
+    node_theme: NodeTheme,
+    stencil: NodeStencil,
+    area: Rect,
+) -> Paragraph<'_> {
     let v_pad = if area.height > 1 {
         (area.height.saturating_sub(1)) / 2
     } else {
@@ -345,21 +460,10 @@ fn center_label(node: &Node, node_theme: NodeTheme, area: Rect) -> Paragraph<'_>
         lines.push(Line::from(""));
     }
 
-    let label_line = match node.shape {
-        NodeShape::Diamond => Line::from(vec![
-            Span::styled("◆", Style::default().fg(node_theme.icon)),
-            Span::raw(" "),
-            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
-        ]),
-        NodeShape::Circle => Line::from(vec![
-            Span::styled("●", Style::default().fg(node_theme.icon)),
-            Span::raw(" "),
-            Span::styled(node.label.clone(), Style::default().fg(node_theme.text)),
-        ]),
-        NodeShape::Rectangle | NodeShape::RoundedRect => Line::from(Span::styled(
-            node.label.clone(),
-            Style::default().fg(node_theme.text),
-        )),
+    let label_line = if stencil.is_generic() {
+        shape_label_line(node, node_theme)
+    } else {
+        stencil_icon_line(node, node_theme, stencil)
     }
     .centered();
 
@@ -486,12 +590,78 @@ fn edge_v_char(style: &EdgeStyle) -> char {
 fn edge_class_style(class: Option<&EdgeClass>, theme: &Theme) -> Style {
     let fg = match class {
         Some(EdgeClass::Telemetry) => theme.muted,
-        Some(EdgeClass::Error) => Color::Rgb(243, 139, 168),
-        Some(EdgeClass::BackEdge) => Color::Rgb(203, 166, 247),
-        Some(EdgeClass::External) => Color::Rgb(116, 199, 236),
-        Some(EdgeClass::Primary) | None => theme.edge,
+        Some(EdgeClass::Error) => theme.accent_secondary,
+        Some(EdgeClass::Primary | EdgeClass::BackEdge | EdgeClass::External) | None => theme.edge,
     };
     Style::default().fg(fg).bg(Color::Reset)
+}
+
+fn draw_edge_label(
+    buf: &mut ratatui::buffer::Buffer,
+    label: &str,
+    lx: u16,
+    ly: u16,
+    theme: &Theme,
+    nodes: &[Node],
+) {
+    let label_width = label.chars().count() as u16;
+    let ly = choose_label_y(buf, lx, ly, label_width, theme, nodes);
+    let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
+
+    for (i, ch) in label.chars().enumerate() {
+        let px = lx + i as u16;
+        if px < buf.area.x + buf.area.width
+            && ly < buf.area.y + buf.area.height
+            && !is_inside_any_node(px, ly, nodes)
+        {
+            buf[(px, ly)].set_char(ch).set_style(label_style);
+        }
+    }
+}
+
+fn choose_label_y(
+    buf: &ratatui::buffer::Buffer,
+    lx: u16,
+    preferred_y: u16,
+    label_width: u16,
+    theme: &Theme,
+    nodes: &[Node],
+) -> u16 {
+    const OFFSETS: [i16; 9] = [0, -1, 1, -2, 2, -3, 3, -4, 4];
+    for offset in OFFSETS {
+        let y = preferred_y as i32 + offset as i32;
+        if y < buf.area.y as i32 || y >= (buf.area.y + buf.area.height) as i32 {
+            continue;
+        }
+        let y = y as u16;
+        if label_row_is_clear(buf, lx, y, label_width, theme, nodes) {
+            return y;
+        }
+    }
+    preferred_y
+}
+
+fn label_row_is_clear(
+    buf: &ratatui::buffer::Buffer,
+    lx: u16,
+    ly: u16,
+    label_width: u16,
+    theme: &Theme,
+    nodes: &[Node],
+) -> bool {
+    let right = lx
+        .saturating_add(label_width)
+        .min(buf.area.x + buf.area.width);
+    for px in lx..right {
+        let cell = &buf[(px, ly)];
+        if is_inside_any_node(px, ly, nodes) {
+            return false;
+        }
+        if cell.fg == theme.edge_label && cell.symbol() != " " {
+            return false;
+        }
+    }
+    true
 }
 
 fn arrowhead_char(dx: i32, dy: i32, arrowhead: &Arrowhead) -> Option<char> {
@@ -863,16 +1033,10 @@ fn render_edge(
                 .as_ref()
                 .or_else(|| route.points.get(route.points.len() / 2));
             if let Some(anchor) = anchor {
-                let lx =
-                    (anchor.x.max(0.0).round() as u16).saturating_sub((label.len() / 2) as u16);
+                let lx = (anchor.x.max(0.0).round() as u16)
+                    .saturating_sub((label.chars().count() / 2) as u16);
                 let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
-                let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
-                for (i, ch) in label.chars().enumerate() {
-                    let px = lx + i as u16;
-                    if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {
-                        buf[(px, ly)].set_char(ch).set_style(label_style);
-                    }
-                }
+                draw_edge_label(buf, label, lx, ly, theme, all_nodes);
             }
         }
 
@@ -1061,13 +1225,6 @@ fn render_edge(
             (label_x + 1, label_y)
         };
 
-        let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
-
-        for (i, ch) in label.chars().enumerate() {
-            let px = lx + i as u16;
-            if px < buf_area.x + buf_area.width && ly < buf_area.y + buf_area.height {
-                buf[(px, ly)].set_char(ch).set_style(label_style);
-            }
-        }
+        draw_edge_label(buf, label, lx, ly, theme, all_nodes);
     }
 }

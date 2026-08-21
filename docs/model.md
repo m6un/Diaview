@@ -48,9 +48,9 @@ Current Mermaid flowchart shape support:
 | `A(text)` | `RoundedRect` | rounded semantic card |
 | `A{text}` | `Diamond` | decision styling with `◆` icon |
 | `A((text))` | `Circle` | circular semantic styling with `●` icon |
-| `A[(text)]` | `Rectangle` | Mermaid database/cylinder syntax, normalized to rectangle for now |
+| `A[(text)]` | `Database` | Mermaid database/cylinder syntax rendered as a database card |
 
-There is no dedicated database shape yet.
+Database is a dedicated model shape; other artifacts remain ordinary nodes with renderer-inferred icon treatments.
 
 ## Edges
 
@@ -122,7 +122,7 @@ Parser fills ids, labels, membership, and nesting parent. Layout computes bounds
 Likely future additions:
 
 - group-level edges and group boundary ports
-- richer shape taxonomy, e.g. dedicated database/cylinder shape
+- richer shape taxonomy when additional Mermaid shapes are needed
 - collapsed/summary nodes for large diagrams
 - explicit selection/hover metadata for interactive mode
 - viewport or display-state structs kept separate from pure graph data where practical

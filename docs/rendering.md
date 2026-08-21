@@ -9,22 +9,28 @@ The renderer should produce diagrams that feel native in Ghostty, tmux, neovim, 
 - Ratatui for buffer/widget rendering
 - Crossterm for terminal integration
 - Unicode box/line drawing for structure
+- Nerd Fonts v3 Material Design glyphs for artifact icons
 - 24-bit color where available
 - Ratatui `TestBackend` for non-interactive tests and inline rendering
+
+## Font requirement
+
+The active terminal font must be a Nerd Font-patched font or use `Symbols Nerd Font Mono` as a fallback. Diaview emits Nerd Fonts Private Use Area codepoints directly; it does not draw or bundle raster icons.
 
 ## Aesthetic direction
 
 Current visual direction:
 
 - 24-bit truecolor fills
-- soft Ayu Dark-inspired colors
+- neutral grey surfaces with blue highlights
 - borderless filled cards
-- semantic icons for non-rectangular shapes, e.g. `◆`, `●`
+- semantic icons for shapes and common engineering artifacts
 - subtle one-cell shadows
 - muted orthogonal edges
 - distinct edge colors for telemetry/error/back-edge/external classes
 - visible arrowheads
 - clean junction glyphs
+- fullscreen diagrams centered in the available viewport when they fit
 - group boxes drawn behind nodes
 
 ## Node rendering
@@ -37,10 +43,9 @@ Current node rendering maps model shape to terminal treatment:
 | Rounded rectangle | filled card with rounded semantic treatment where applicable |
 | Diamond | decision styling with `◆` icon |
 | Circle | circular semantic treatment with `●` icon |
+| Database | database card with the `nf-md-database` icon |
 
-Mermaid database/cylinder syntax is currently normalized to `Rectangle`; there is no dedicated database card treatment yet.
-
-Exact glyph choices may evolve, but readability and terminal compatibility matter more than literal geometric perfection.
+Common engineering artifacts use a curated `nf-md-*` icon vocabulary, including bucket, queue, event, function, worker, cache, router, shield, pulse, monitor, and cloud symbols.
 
 ## Group rendering
 

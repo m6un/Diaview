@@ -3,6 +3,7 @@ use crate::model::{
     Arrowhead, Direction, Edge, EdgeClass, EdgeStyle, Graph, Node, NodeShape, Port, PortSide,
     RoutePlan, RoutePoint,
 };
+use crate::stencil::node_display_cell_width;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const NODE_PADDING_X: f64 = 1.0;
@@ -75,16 +76,13 @@ fn size_nodes(nodes: &mut [Node]) {
 }
 
 fn label_cell_width(node: &Node) -> f64 {
-    match node.shape {
-        NodeShape::Diamond | NodeShape::Circle => node.label.len() as f64 + 2.0,
-        _ => node.label.len() as f64,
-    }
+    node_display_cell_width(node) as f64
 }
 
 fn node_shape_size(node: &Node, label_width: f64) -> (f64, f64) {
     let width = match node.shape {
         NodeShape::Diamond => (label_width + NODE_PADDING_X * 2.0 + 2.0) * DIAMOND_WIDTH_FACTOR,
-        NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect => {
+        NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect | NodeShape::Database => {
             label_width + NODE_PADDING_X * 2.0 + 2.0
         }
     };

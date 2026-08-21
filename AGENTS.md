@@ -35,7 +35,8 @@ Mermaid input → parser → Graph IR → layout → Ratatui renderer → termin
 - `src/layout.rs` — layout abstraction and public entry points
 - `src/layout/simple.rs` — native layout engine, route planning, group bounds, and dummy nodes
 - `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, edge routing, tests
-- `src/theme.rs` — static Ayu Dark-inspired terminal theme
+- `src/stencil.rs` — terminal artifact classification, icons, and label sizing
+- `src/theme.rs` — static neutral dark theme with blue semantic accents
 - `src/testdata.rs` — reusable graph and Mermaid fixtures
 - `src/main.rs` — CLI entry point
 
@@ -43,6 +44,7 @@ Mermaid input → parser → Graph IR → layout → Ratatui renderer → termin
 
 - Use Rust + Ratatui + Crossterm.
 - Keep rendering terminal-native; do not use Kitty graphics or raster images.
+- Require Nerd Fonts v3 glyph support via a patched terminal font or `Symbols Nerd Font Mono` fallback.
 - Own the layout pipeline for now; do not introduce dagre/graphviz as hidden dependencies.
 - Parse existing diagram languages; do not invent a new DSL.
 - Keep parser, layout, and renderer testable with `cargo test` without opening a real terminal.

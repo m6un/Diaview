@@ -10,6 +10,7 @@ pub enum NodeShape {
     RoundedRect,
     Diamond,
     Circle,
+    Database,
 }
 
 #[derive(Debug, Clone, PartialEq)]

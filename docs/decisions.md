@@ -8,6 +8,12 @@ Diaview renders diagrams directly in the terminal using text, Unicode, color, an
 
 It should not rely on Kitty graphics, raster images, browser rendering, or screenshot generation as the primary path.
 
+## Nerd Fonts are a runtime requirement
+
+Diaview uses Nerd Fonts v3 Material Design glyphs for recognizable engineering artifact icons. Users must configure either a Nerd Font-patched terminal font or `Symbols Nerd Font Mono` as a fallback font.
+
+This is a terminal font prerequisite, not a Cargo dependency: Diaview writes Unicode Private Use Area codepoints through Ratatui, and the configured terminal font supplies the pictograms. Keep the icon vocabulary within one Nerd Fonts family so it remains visually coherent.
+
 ## Own the layout pipeline for now
 
 Diaview should not introduce Dagre, Graphviz, or other hidden layout engines as required runtime dependencies at this stage.
@@ -58,7 +64,7 @@ When Mermaid syntax is useful but the model lacks a dedicated semantic type, nor
 
 Current example:
 
-- `A[(Database)]` parses as a rectangle-shaped node until a dedicated database/cylinder shape exists.
+- `A[(Database)]` parses as the dedicated `Database` node shape.
 
 ## Testability over terminal magic
 

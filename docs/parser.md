@@ -15,7 +15,7 @@ Current parser support:
 - rounded nodes: `A(text)`
 - diamond nodes: `A{text}`
 - circle nodes: `A((text))`
-- database/cylinder nodes: `A[(text)]` normalized to rectangle rendering for now
+- database/cylinder nodes: `A[(text)]` parsed as `NodeShape::Database`
 - bare node refs: `A`, normalized to a rectangle with label `A`
 - solid arrows: `-->`
 - solid links without arrows: `---`
@@ -79,7 +79,7 @@ Important future parser work:
 - class/style declarations if they can map cleanly to themes or semantic node/edge types
 - more robust multiline input handling
 - inline comments if needed
-- richer Mermaid shape mapping, including a dedicated database/cylinder shape if the model grows one
+- richer Mermaid shape mapping when additional shapes are needed
 - better error reporting with line/column context
 
 ## Testing guidance

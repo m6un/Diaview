@@ -1,5 +1,15 @@
 # Development Guide
 
+## Prerequisite
+
+Diaview requires Nerd Fonts v3 glyph support. Configure a patched Nerd Font or install `Symbols Nerd Font Mono` as a terminal fallback.
+
+On macOS with Homebrew:
+
+```bash
+brew install --cask font-symbols-only-nerd-font
+```
+
 ## Local commands
 
 Before handing off changes, run:

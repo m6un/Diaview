@@ -20,7 +20,7 @@ Current focus:
 - `graph TD/TB/LR` and `flowchart TD/LR`
 - common node shapes and edge styles
 - Mermaid `subgraph` blocks as Graph IR groups
-- database/cylinder syntax `A[(label)]`, normalized to rectangle rendering for now
+- database/cylinder syntax `A[(label)]` as `NodeShape::Database`
 
 Future:
 
@@ -64,7 +64,7 @@ The renderer should preserve Diaview's terminal-native identity:
 
 - Unicode box/line drawing
 - 24-bit truecolor fills
-- Ayu Dark-inspired theme
+- neutral dark theme with blue semantic accents and Nerd Font artifact icons
 - borderless filled cards with subtle shadows
 - clean orthogonal edges from layout route metadata
 - readable labels
@@ -88,7 +88,7 @@ The long-term Visual REPL loop uses structured JSON IPC so a selected node plus 
 - `src/layout.rs` — layout abstraction and public layout entry points
 - `src/layout/simple.rs` — default native layout engine, group bounds, edge classification, route planning
 - `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, routed edge drawing
-- `src/theme.rs` — static Ayu Dark-inspired terminal theme
+- `src/theme.rs` — static neutral dark theme with blue semantic accents
 - `src/testdata.rs` — reusable graph and Mermaid fixtures
 - `src/main.rs` — CLI entry point
 - `tests/` — integration tests for parser, layout, renderer, and fixtures

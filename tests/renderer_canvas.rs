@@ -1,5 +1,7 @@
 use diaview::model::*;
-use diaview::renderer::canvas::{render_to_frame, render_to_frame_with_theme, render_to_string};
+use diaview::renderer::canvas::{
+    render_centered_to_frame, render_to_frame, render_to_frame_with_theme, render_to_string,
+};
 use diaview::theme::Theme;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
@@ -287,6 +289,34 @@ fn test_edge_label_is_text_only() {
 }
 
 #[test]
+fn test_graph_is_centered_in_a_larger_viewport() {
+    let mut graph = diaview::parser::mermaid::parse("graph TD\nA[Centered]").unwrap();
+    diaview::layout::layout(&mut graph);
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_centered_to_frame(&graph, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    let occupied: Vec<_> = (0..buf.area.height)
+        .flat_map(|y| (0..buf.area.width).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            let cell = &buf[(x, y)];
+            cell.symbol() != " " || cell.bg != Color::Reset
+        })
+        .collect();
+    let min_x = occupied.iter().map(|(x, _)| *x).min().unwrap();
+    let max_x = occupied.iter().map(|(x, _)| *x).max().unwrap();
+    let min_y = occupied.iter().map(|(_, y)| *y).min().unwrap();
+    let max_y = occupied.iter().map(|(_, y)| *y).max().unwrap();
+
+    assert!(min_x.abs_diff(79 - max_x) <= 2);
+    assert!(min_y.abs_diff(23 - max_y) <= 2);
+}
+
+#[test]
 fn test_inline_output_emits_background_ansi() {
     let output = render_to_string(&test_graph()).unwrap();
     assert!(
@@ -297,6 +327,52 @@ fn test_inline_output_emits_background_ansi() {
         output.contains("\x1b[49m"),
         "inline output should reset background color"
     );
+}
+
+#[test]
+fn test_artifacts_render_nerd_font_icons() {
+    let mut graph = diaview::parser::mermaid::parse(
+        r#"
+        graph LR
+        S3[S3 Upload Bucket] --> L[Resize Lambda]
+        L --> Q[SQS Job Queue]
+        Q --> DB[(Payment DB)]
+        DB --> API[API Gateway]
+        API --> OBS[Metrics Sink]
+        "#,
+    )
+    .unwrap();
+    diaview::layout::layout(&mut graph);
+
+    let (width, height) = graph_bounds(&graph);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_to_frame(&graph, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    let mut plain = String::new();
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            plain.push_str(buf[(x, y)].symbol());
+        }
+        plain.push('\n');
+    }
+
+    for expected in [
+        "\u{f1415}  S3 Upload Bucket",
+        "\u{f0295}  Resize Lambda",
+        "\u{f1296}  SQS Job Queue",
+        "\u{f01bc}  Payment DB",
+        "\u{f11e2}  API Gateway",
+        "\u{f0430}  Metrics Sink",
+    ] {
+        assert!(
+            plain.contains(expected),
+            "rendered diagram should contain artifact stencil {expected:?}:\n{plain}"
+        );
+    }
 }
 
 #[test]

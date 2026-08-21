@@ -10,6 +10,24 @@ fn main() {
     for arg in std::env::args().skip(1) {
         match arg.as_str() {
             "--inline" | "-i" => inline = true,
+            "--help" | "-h" => {
+                println!(
+                    "Diaview\n\nUSAGE:\n    diaview [--inline] [diagram.mmd]\n\nOPTIONS:\n    -i, --inline    Render ANSI output to stdout\n    -h, --help      Print help\n    -V, --version   Print version\n\nREQUIRES:\n    Nerd Fonts v3 glyph support"
+                );
+                return;
+            }
+            "--version" | "-V" => {
+                println!("diaview {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            _ if arg.starts_with('-') => {
+                eprintln!("Unknown option: {arg}");
+                std::process::exit(1);
+            }
+            _ if path.is_some() => {
+                eprintln!("Only one diagram file may be provided");
+                std::process::exit(1);
+            }
             _ => path = Some(arg),
         }
     }

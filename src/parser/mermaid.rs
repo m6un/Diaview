@@ -362,7 +362,7 @@ fn parse_node_decl(s: &str) -> Result<ParsedNodeDecl, String> {
             .rfind(")]")
             .ok_or_else(|| format!("unclosed '[(' in node '{s}'"))?;
         let label = rest[..close].to_string();
-        return Ok(ParsedNodeDecl::new(id, NodeShape::Rectangle, label));
+        return Ok(ParsedNodeDecl::new(id, NodeShape::Database, label));
     }
 
     if let Some(open) = s.find('(') {
