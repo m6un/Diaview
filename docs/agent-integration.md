@@ -32,20 +32,28 @@ Planned loop:
 
 ## JSON IPC shape
 
-Planned output shape:
+Protocol v1 is a single JSON document with the minimal useful payload:
 
 ```json
 {
-  "action": "modify",
+  "protocol": "diaview.action",
+  "version": 1,
   "selected_node": {
     "id": "B",
-    "label": "JWT Validator",
-    "shape": "diamond"
+    "label": "JWT Validator"
   },
   "prompt": "Add a Redis cache layer before this for token revocation",
-  "current_graph": "graph TD\n    A[Request] --> B{JWT Validator}\n    ..."
+  "mermaid": "graph TD\n    A[Request] --> B{JWT Validator}\n    ..."
 }
 ```
+
+Notes:
+
+- `protocol` is fixed to `diaview.action`.
+- `version` is `1`.
+- `selected_node` only includes `id` and `label`.
+- `mermaid` preserves the exact original source.
+- No normalized graph JSON, neighbors, groups, routes, viewport, layout, timestamps, UUIDs, cancellation events, or negotiation.
 
 Potential future additions:
 
