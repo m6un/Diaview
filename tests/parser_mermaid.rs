@@ -340,6 +340,31 @@ fn test_unclosed_pipe_label() {
 }
 
 #[test]
+fn test_directives_are_ignored() {
+    let g = parse(
+        "graph TD\nclassDef hot fill:#f00\nclass A hot\nlinkStyle 0 stroke:#333\nstyle A fill:#ccc\nclick A https://example.com\nA --> B",
+    )
+    .unwrap();
+    assert_eq!(g.nodes.len(), 2);
+    assert_eq!(g.edges.len(), 1);
+    assert_eq!(g.nodes[0].id, "A");
+    assert_eq!(g.nodes[1].id, "B");
+}
+
+#[test]
 fn test_only_comments() {
     assert!(parse("%% nothing here").is_err());
+}
+
+#[test]
+fn test_malformed_supported_syntax_reports_line_number() {
+    let err =
+        parse("graph TD\n\n%% comment\nclassDef hot fill:#f00\nA[hello\nB --> C").unwrap_err();
+    assert!(err.contains("line 5"), "{err}");
+}
+
+#[test]
+fn test_unexpected_end_reports_statement_line() {
+    let err = parse("graph TD\n\n%% comment\nend").unwrap_err();
+    assert!(err.contains("line 4"), "{err}");
 }

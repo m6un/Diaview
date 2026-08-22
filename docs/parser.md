@@ -26,6 +26,7 @@ Current parser support:
 - Mermaid `subgraph` blocks with group ids, labels, membership, and parent group metadata
 - whole-line comments starting with `%%`
 - semicolon-separated statements
+- known non-topological directives are ignored: `classDef`, `class`, `linkStyle`, `style`, and `click`
 
 ## Parser responsibilities
 
@@ -81,6 +82,8 @@ Important future parser work:
 - inline comments if needed
 - richer Mermaid shape mapping when additional shapes are needed
 - better error reporting with line/column context
+
+Current error reporting includes a 1-based source line number for malformed supported syntax, with semicolon-separated statements keeping their original source line.
 
 ## Testing guidance
 
