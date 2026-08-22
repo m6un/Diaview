@@ -49,6 +49,14 @@ Mermaid input → parser → Graph IR → layout → Ratatui renderer → termin
 - Parse existing diagram languages; do not invent a new DSL.
 - Keep parser, layout, and renderer testable with `cargo test` without opening a real terminal.
 
+## Git workflow
+
+- Do all implementation on a feature branch in an isolated worktree.
+- Leave changes uncommitted for review in Neovim unless explicitly asked to commit.
+- After approval, commit and push only the feature branch, then open a pull request.
+- Let GitHub Actions validate the pull request before merge.
+- Never push or merge directly to `main` unless explicitly instructed.
+
 ## Before handing off changes
 
 ```bash
