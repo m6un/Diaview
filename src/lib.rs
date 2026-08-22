@@ -1,4 +1,5 @@
 pub mod app;
+pub mod herdr;
 pub mod ipc;
 pub mod layout;
 pub mod model;

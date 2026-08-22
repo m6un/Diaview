@@ -2,37 +2,39 @@
 
 Diaview's long-term goal is to become a Visual REPL for human + AI architecture planning.
 
-Instead of only editing Mermaid text, a user should be able to select a node, type an instruction, and feed structured graph context back to an agent.
+Instead of only editing Mermaid text, a user can select a node, type an instruction, and send structured context back to the agent that owns the current Herdr pane.
 
 ## Current integration surface
 
-
 - `diaview --inline` renders Mermaid diagrams as ANSI terminal output without alternate screen/raw mode.
+- `diaview diagram.mmd` opens a standalone fullscreen viewer with visual-flow node selection only.
+- `diaview --herdr diagram.mmd` launches a Herdr sidecar pane for persistent agent-backed edits.
 - The parser/layout/renderer pipeline can be called from the library for tests or future integrations.
 - Route metadata, groups, and edge classes are present in the Graph IR after layout, so future tools can inspect more than just nodes and edges.
 
 Not implemented yet:
 
-- interactive selection
-- action bar
-- JSON IPC output
+- ACP
 - Pi extension/tool wrapper
+- normalized graph IPC
 
-## Visual REPL loop
+## Herdr v0 Visual REPL loop
 
-Planned loop:
+Implemented loop:
 
-1. Agent produces Mermaid.
-2. Diaview renders the diagram.
-3. User selects a node.
-4. User enters an instruction such as "Add a Redis cache before this".
-5. Diaview emits structured JSON.
-6. Agent receives the selected-node context and updates the Mermaid.
-7. Diaview reopens with the updated graph.
+1. An agent runs `diaview --herdr diagram.mmd` from a Herdr-managed pane.
+2. Diaview reads `HERDR_PANE_ID`, resolves the Mermaid path to an absolute file path, creates a pane to the right with `herdr pane split`, starts an internal sidecar with `herdr pane run`, then returns immediately.
+3. The sidecar renders the diagram and lets the user select a real node.
+4. The user presses `i` or `Enter`, types an instruction, and presses `Enter`.
+5. The sidecar stays open, enters “Waiting for agent”, and invokes `herdr agent prompt <origin-pane> <instruction>` without a shell.
+6. The instruction includes selected node id/label, absolute Mermaid path, the user instruction, and tells the agent to edit/save that file directly within Diaview's supported Mermaid subset.
+7. The sidecar polls the file. Valid changed Mermaid is parsed, laid out, and displayed; invalid intermediate Mermaid keeps the last valid graph and shows an invalid-Mermaid status while waiting. Agent/bridge delivery failures show as update errors.
+
+`Esc` while prompting cancels the prompt. `Esc` while waiting only stops local waiting; it does not cancel the external agent. `q` while browsing exits the sidecar.
 
 ## JSON IPC shape
 
-Protocol v1 is a single JSON document with the minimal useful payload:
+The existing protocol v1 schema remains in the codebase for future use:
 
 ```json
 {
@@ -47,13 +49,15 @@ Protocol v1 is a single JSON document with the minimal useful payload:
 }
 ```
 
-Notes:
+This ActionDocument stdout handoff is **not** the active runtime path for v0. Herdr sidecar mode uses `herdr agent prompt` and file polling instead. No ActionDocument JSON is written to stdout on prompt submission.
+
+Notes for the dormant schema:
 
 - `protocol` is fixed to `diaview.action`.
 - `version` is `1`.
 - `selected_node` only includes `id` and `label`.
 - `mermaid` preserves the exact original source.
-- No normalized graph JSON, neighbors, groups, routes, viewport, layout, timestamps, UUIDs, cancellation events, or negotiation.
+- No normalized graph JSON, neighbors, groups, routes, viewport, layout, timestamps, UUIDs, cancellation events, history, or negotiation.
 
 Potential future additions:
 
@@ -63,26 +67,9 @@ Potential future additions:
 - neighboring nodes and incident edges
 - full graph text and/or normalized graph JSON
 
-## Pi integration plan
-
-A future Pi extension can expose a tool such as:
-
-```ts
-open_diagram({ mermaid: string })
-```
-
-Expected behavior:
-
-- suspend Pi's TUI
-- launch `diaview --interactive`
-- pass Mermaid input via stdin
-- collect JSON output from stdout
-- feed the JSON context and user prompt back to the agent
-- relaunch Diaview with the updated Mermaid if the loop continues
-
 ## Inline chat rendering
 
-Inline rendering is the nearer-term integration path:
+Inline rendering is the nearer-term non-interactive integration path:
 
 - detect Mermaid code blocks in agent output
 - pipe them through `diaview --inline`
@@ -93,9 +80,10 @@ The CLI side is already implemented. The remaining work is Pi/chat integration a
 
 ## Design constraints
 
-- stdout JSON should be machine-readable and stable in interactive IPC mode.
-- human UI logs should not corrupt JSON IPC output.
+- Herdr launcher mode requires a real file and `HERDR_PANE_ID`.
+- Piped/stdin input remains inline-only for v0.
+- Herdr subprocess calls use argument arrays; user prompt, labels, and paths are not shell-interpolated.
+- The only shell quoting is the command string passed to `herdr pane run`.
 - selected-node context should be sufficient for an agent to make localized edits.
-- the full current graph should be available when broader edits are needed.
-- exiting without an action should be distinguishable from submitting an action.
-- inline ANSI rendering and JSON IPC should remain separate modes so chat output cannot accidentally corrupt structured IPC.
+- the full Mermaid file should remain available when broader edits are needed.
+- inline ANSI rendering and Herdr sidecar action flow remain separate modes.

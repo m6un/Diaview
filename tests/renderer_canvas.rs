@@ -333,8 +333,87 @@ fn test_app_renderer_highlights_selection_and_status_bar() {
     assert!(cell_text(buf, 0, 23, 80).contains("A Start"));
     let status = cell_text(buf, 0, 23, 80);
     assert!(status.contains("Tab/Shift+Tab"));
+    assert!(status.contains("q quit"));
+    assert!(!status.contains("i/Enter action"));
     assert!(!status.contains("pan"));
     assert_eq!(buf[(36, 6)].bg, theme.accent_primary);
+}
+
+#[test]
+fn test_app_renderer_shows_actions_hint_when_enabled() {
+    let graph = test_graph();
+    let mut app = AppState::new(graph);
+    app.enable_actions();
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let status = cell_text(terminal.backend().buffer(), 0, 23, 80);
+
+    assert!(status.contains("i/Enter action"));
+    assert!(status.contains("q quit"));
+}
+
+#[test]
+fn test_app_renderer_shows_prompt_status_bar() {
+    let graph = test_graph();
+    let mut app = AppState::new(graph);
+    app.enable_actions();
+    app.open_prompt();
+    app.push_prompt_char('q');
+    app.push_prompt_char('π');
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let status = cell_text(terminal.backend().buffer(), 0, 23, 80);
+
+    assert!(status.contains("A Start"));
+    assert!(status.contains("prompt: qπ"));
+    assert!(status.contains("Enter send"));
+    assert!(status.contains("Esc cancel"));
+    assert!(!status.contains("q quit"));
+}
+
+#[test]
+fn test_app_renderer_shows_waiting_and_update_error_status() {
+    let graph = test_graph();
+    let mut app = AppState::new(graph);
+    app.mode = diaview::app::AppMode::Waiting {
+        update_status: None,
+    };
+    let backend = TestBackend::new(100, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let status = cell_text(terminal.backend().buffer(), 0, 23, 100);
+    assert!(status.contains("Waiting for agent"));
+    assert!(status.contains("Esc stop waiting"));
+
+    app.mode = diaview::app::AppMode::Waiting {
+        update_status: Some(diaview::app::UpdateStatus::AgentError("bridge down".into())),
+    };
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let status = cell_text(terminal.backend().buffer(), 0, 23, 100);
+    assert!(status.contains("Agent update error: bridge down"));
+    assert!(status.contains("waiting"));
+
+    app.mode = diaview::app::AppMode::Waiting {
+        update_status: Some(diaview::app::UpdateStatus::MermaidError(
+            "bad mermaid".into(),
+        )),
+    };
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let status = cell_text(terminal.backend().buffer(), 0, 23, 100);
+    assert!(status.contains("Invalid Mermaid: bad mermaid"));
+    assert!(status.contains("waiting"));
 }
 
 #[test]

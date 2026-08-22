@@ -1,4 +1,9 @@
-use std::io::{self, stdout};
+use std::{
+    fs,
+    io::{self, stdout},
+    path::Path,
+    time::Duration,
+};
 
 use crossterm::{
     event::{self, Event, KeyCode},
@@ -14,7 +19,8 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use crate::app::AppState;
+use crate::app::{AppMode, AppState, UpdateStatus};
+use crate::herdr;
 use crate::model::{
     Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape, PortSide, RoutePlan,
 };
@@ -37,6 +43,75 @@ pub fn render(graph: &Graph) -> io::Result<()> {
                 KeyCode::Tab => app.select_next(),
                 KeyCode::BackTab => app.select_prev(),
                 _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
+pub fn render_herdr_sidecar(
+    graph: &Graph,
+    diagram_path: &Path,
+    origin_pane: &str,
+    source: String,
+) -> io::Result<()> {
+    let mut out = stdout();
+    let _guard = TerminalGuard::enter(&mut out)?;
+    let backend = CrosstermBackend::new(out);
+    let mut terminal = Terminal::new(backend)?;
+    let mut app = AppState::new(graph.clone());
+    app.enable_actions();
+    let mut last_source = source;
+
+    loop {
+        terminal.draw(|frame| render_app_to_frame(&mut app, frame))?;
+
+        if event::poll(Duration::from_millis(250))?
+            && let Event::Key(key) = event::read()?
+        {
+            match &app.mode {
+                AppMode::Browsing => match key.code {
+                    KeyCode::Char('q') | KeyCode::Esc => break,
+                    KeyCode::Char('i') | KeyCode::Enter => app.open_prompt(),
+                    KeyCode::Tab => app.select_next(),
+                    KeyCode::BackTab => app.select_prev(),
+                    _ => {}
+                },
+                AppMode::Prompt(_) => match key.code {
+                    KeyCode::Char(ch) => app.push_prompt_char(ch),
+                    KeyCode::Backspace => app.backspace_prompt(),
+                    KeyCode::Esc => app.cancel_prompt(),
+                    KeyCode::Enter => {
+                        if let Some(submission) = app.submit_prompt_to_waiting()
+                            && let Err(error) =
+                                herdr::prompt_agent(origin_pane, diagram_path, &submission)
+                        {
+                            app.set_waiting_status(UpdateStatus::AgentError(error));
+                        }
+                    }
+                    _ => {}
+                },
+                AppMode::Waiting { .. } => {
+                    if key.code == KeyCode::Esc {
+                        app.stop_waiting();
+                    }
+                }
+            }
+        }
+
+        if matches!(app.mode, AppMode::Waiting { .. }) {
+            match fs::read_to_string(diagram_path) {
+                Ok(next_source) if next_source != last_source => {
+                    match app.reload_mermaid(&next_source) {
+                        Ok(()) => last_source = next_source,
+                        Err(error) => app.set_waiting_status(UpdateStatus::MermaidError(error)),
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => app.set_waiting_status(UpdateStatus::FileError(format!(
+                    "Failed to read diagram: {error}"
+                ))),
             }
         }
     }
@@ -344,7 +419,27 @@ fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect, theme: &Them
         .selected_node()
         .map(|node| format!("{} {}", node.id, node.label))
         .unwrap_or_else(|| "no selection".to_string());
-    let text = format!(" {selected} | Tab/Shift+Tab select | q quit");
+    let text = match &app.mode {
+        AppMode::Browsing if app.actions_enabled => {
+            format!(" {selected} | Tab/Shift+Tab select | i/Enter action | q quit")
+        }
+        AppMode::Browsing => format!(" {selected} | Tab/Shift+Tab select | q quit"),
+        AppMode::Prompt(prompt) => {
+            format!(" {selected} | prompt: {prompt} | Enter send | Esc cancel")
+        }
+        AppMode::Waiting {
+            update_status: None,
+        } => format!(" {selected} | Waiting for agent; watching file | Esc stop waiting"),
+        AppMode::Waiting {
+            update_status: Some(UpdateStatus::AgentError(error)),
+        } => format!(" {selected} | Agent update error: {error} | waiting | Esc stop waiting"),
+        AppMode::Waiting {
+            update_status: Some(UpdateStatus::MermaidError(error)),
+        } => format!(" {selected} | Invalid Mermaid: {error} | waiting | Esc stop waiting"),
+        AppMode::Waiting {
+            update_status: Some(UpdateStatus::FileError(error)),
+        } => format!(" {selected} | File update error: {error} | waiting | Esc stop waiting"),
+    };
     let bar = Paragraph::new(text).style(Style::default().fg(theme.text).bg(theme.accent_primary));
     frame.render_widget(bar, rect);
 }
