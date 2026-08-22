@@ -31,40 +31,13 @@ pub fn render(graph: &Graph) -> io::Result<()> {
     loop {
         terminal.draw(|frame| render_app_to_frame(&mut app, frame))?;
 
-        match event::read()? {
-            Event::Key(key) => match key.code {
+        if let Event::Key(key) = event::read()? {
+            match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => break,
-                KeyCode::Tab => {
-                    let area = terminal_graph_area(&terminal)?;
-                    app.select_next(area.width, area.height);
-                }
-                KeyCode::BackTab => {
-                    let area = terminal_graph_area(&terminal)?;
-                    app.select_prev(area.width, area.height);
-                }
-                KeyCode::Left | KeyCode::Char('h') => {
-                    let area = terminal_graph_area(&terminal)?;
-                    app.pan_by(-2, 0, area.width, area.height);
-                }
-                KeyCode::Right | KeyCode::Char('l') => {
-                    let area = terminal_graph_area(&terminal)?;
-                    app.pan_by(2, 0, area.width, area.height);
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    let area = terminal_graph_area(&terminal)?;
-                    app.pan_by(0, -1, area.width, area.height);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    let area = terminal_graph_area(&terminal)?;
-                    app.pan_by(0, 1, area.width, area.height);
-                }
+                KeyCode::Tab => app.select_next(),
+                KeyCode::BackTab => app.select_prev(),
                 _ => {}
-            },
-            Event::Resize(width, height) => {
-                let area = graph_area(Rect::new(0, 0, width, height));
-                app.ensure_selected_visible(area.width, area.height);
             }
-            _ => {}
         }
     }
 
@@ -264,19 +237,10 @@ pub fn render_app_to_frame_with_theme(app: &mut AppState, frame: &mut Frame, the
     }
 
     let graph_area = graph_area(area);
-    app.ensure_selected_visible(graph_area.width, graph_area.height);
     let mut graph = app.graph.clone();
     let (graph_width, graph_height) = graph_bounds(&graph);
-    let offset_x = if graph_width <= graph_area.width {
-        graph_area.x as i32 + graph_area.width.saturating_sub(graph_width) as i32 / 2
-    } else {
-        graph_area.x as i32 - app.viewport_x as i32
-    };
-    let offset_y = if graph_height <= graph_area.height {
-        graph_area.y as i32 + graph_area.height.saturating_sub(graph_height) as i32 / 2
-    } else {
-        graph_area.y as i32 - app.viewport_y as i32
-    };
+    let offset_x = graph_area.x + graph_area.width.saturating_sub(graph_width) / 2;
+    let offset_y = graph_area.y + graph_area.height.saturating_sub(graph_height) / 2;
     translate_graph(&mut graph, offset_x as f64, offset_y as f64);
     render_graph(
         &graph,
@@ -290,11 +254,6 @@ pub fn render_app_to_frame_with_theme(app: &mut AppState, frame: &mut Frame, the
 
 fn graph_area(area: Rect) -> Rect {
     Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1))
-}
-
-fn terminal_graph_area<B: ratatui::backend::Backend>(terminal: &Terminal<B>) -> io::Result<Rect> {
-    let size = terminal.size()?;
-    Ok(graph_area(Rect::new(0, 0, size.width, size.height)))
 }
 
 pub fn render_centered_to_frame(graph: &Graph, frame: &mut Frame) {
@@ -385,7 +344,7 @@ fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect, theme: &Them
         .selected_node()
         .map(|node| format!("{} {}", node.id, node.label))
         .unwrap_or_else(|| "no selection".to_string());
-    let text = format!(" {selected} | Tab/Shift+Tab select | arrows/hjkl pan | q quit");
+    let text = format!(" {selected} | Tab/Shift+Tab select | q quit");
     let bar = Paragraph::new(text).style(Style::default().fg(theme.text).bg(theme.accent_primary));
     frame.render_widget(bar, rect);
 }
