@@ -42,6 +42,16 @@ cargo run -- --inline fixtures/simple.mmd
 
 Without a file path, `main.rs` renders the medium simple fixture from `src/testdata.rs`.
 
+## Docs links
+
+- `README.md` — product overview and supported v0 usage
+- `docs/architecture.md` — pipeline and module responsibilities
+- `docs/parser.md` — Mermaid flowchart parser scope
+- `docs/layout.md` — current layout strategy and limits
+- `docs/rendering.md` — terminal rendering approach
+- `docs/testing.md` — inspection and test guidance
+- `docs/roadmap.md` — current phase and next steps
+
 ## Development principles
 
 - Keep the project pure Rust where practical.

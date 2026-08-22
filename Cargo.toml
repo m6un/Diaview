@@ -2,6 +2,11 @@
 name = "diaview"
 version = "0.1.0"
 edition = "2024"
+description = "Terminal-native Mermaid flowchart renderer"
+repository = "https://github.com/m6un/Diaview"
+readme = "README.md"
+keywords = ["terminal", "mermaid", "diagram", "ratatui"]
+categories = ["command-line-utilities", "visualization"]
 
 [dependencies]
 ratatui = "0.29"
