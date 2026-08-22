@@ -5,6 +5,7 @@ edition = "2024"
 description = "Terminal-native Mermaid flowchart renderer"
 repository = "https://github.com/m6un/Diaview"
 readme = "README.md"
+license = "MIT OR Apache-2.0"
 keywords = ["terminal", "mermaid", "diagram", "ratatui"]
 categories = ["command-line-utilities", "visualization"]
 
