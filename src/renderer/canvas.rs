@@ -1129,10 +1129,8 @@ fn render_edge(
 
     let mut arrow_dx;
     let mut arrow_dy;
-    let label_x;
-    let label_y;
 
-    if *direction == Direction::TopDown {
+    let (label_x, label_y) = if *direction == Direction::TopDown {
         let mid_y = (start.1 + end.1) / 2;
 
         let (y0, y1) = min_max(start.1, mid_y);
@@ -1209,8 +1207,7 @@ fn render_edge(
             arrow_dy = end.1 as i32 - mid_y as i32;
         }
 
-        label_x = (start.0 + end.0) / 2;
-        label_y = mid_y;
+        ((start.0 + end.0) / 2, mid_y)
     } else {
         let mid_x = (start.0 + end.0) / 2;
 
@@ -1288,9 +1285,8 @@ fn render_edge(
             arrow_dy = 0;
         }
 
-        label_x = mid_x;
-        label_y = (start.1 + end.1) / 2;
-    }
+        (mid_x, (start.1 + end.1) / 2)
+    };
 
     if let Some((dx, dy)) = arrow_vector_into_node(tgt, end) {
         arrow_dx = dx;
