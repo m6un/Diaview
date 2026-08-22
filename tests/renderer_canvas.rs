@@ -331,7 +331,9 @@ fn test_app_renderer_highlights_selection_and_status_bar() {
     let buf = terminal.backend().buffer();
 
     assert!(cell_text(buf, 0, 23, 80).contains("A Start"));
-    assert!(cell_text(buf, 0, 23, 80).contains("Tab/Shift+Tab"));
+    let status = cell_text(buf, 0, 23, 80);
+    assert!(status.contains("Tab/Shift+Tab"));
+    assert!(!status.contains("pan"));
     assert_eq!(buf[(36, 6)].bg, theme.accent_primary);
 }
 
@@ -339,7 +341,7 @@ fn test_app_renderer_highlights_selection_and_status_bar() {
 fn test_app_renderer_can_reach_second_node_in_80x24() {
     let graph = test_graph();
     let mut app = AppState::new(graph);
-    app.select_next(80, 23);
+    app.select_next();
     let backend = TestBackend::new(80, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     terminal

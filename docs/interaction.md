@@ -1,10 +1,21 @@
 # Interaction
 
-Phase 2 turns Diaview from a static renderer into a navigable interactive TUI.
+Phase 2 turns Diaview from a static renderer into a small fit-first interactive TUI.
 
-## Implemented P0 behavior
+## v0 scope
 
-Fullscreen mode now runs a persistent Ratatui event loop:
+Diaview v0 targets small and medium diagrams that fit in the terminal. Fullscreen mode centers the fitted diagram in the graph area above the status bar.
+
+Out of scope for v0:
+
+- viewport panning or auto-pan
+- scaling or zoom
+- responsive relayout on resize
+- heavy/oversized diagram navigation
+
+## Implemented behavior
+
+Fullscreen mode runs a persistent Ratatui event loop:
 
 - enter raw mode and alternate screen
 - draw the current frame
@@ -23,9 +34,8 @@ The terminal-independent state lives in `AppState` and tracks:
 
 - current graph
 - selected node id
-- viewport x/y offset
 
-State transitions for selection, panning, pan bounds, and keeping the selected node visible are pure and testable without a real terminal.
+Selection state is pure and testable without a real terminal.
 
 ## Selection
 
@@ -36,33 +46,19 @@ Implemented controls:
 - order is deterministic by node id
 - dummy routing nodes with ids beginning `__dummy` are never selectable
 - the selected card renders with a strong blue highlight from the existing theme
-- when selection changes, the viewport is adjusted so the selected node remains fully visible when it fits in the viewport
 
-Future work may add groups or edges as selectable targets, but P0 selects real nodes only.
-
-## Panning
-
-Implemented controls:
-
-- left/right/up/down arrows pan the viewport
-- `h`/`j`/`k`/`l` also pan the viewport
-- panning is clamped to graph bounds
-- resize events redraw and keep the current selected node visible
-
-Spatial nearest-node navigation, mouse navigation, zoom, and configurable keybindings are not implemented in P0.
+Future work may add groups, edges, spatial navigation, mouse navigation, zoom, or configurable keybindings, but v0 selects real nodes only.
 
 ## Status bar
 
 Fullscreen mode reserves the bottom terminal row for a concise status bar showing:
 
 - selected node id and label, or `no selection`
-- key hints for selection, panning, and quit
+- key hints for selection and quit
 
-The graph renders in the remaining area above the status bar.
+The graph renders centered in the remaining area above the status bar.
 
 ## Rendering notes
-
-Fullscreen diagrams remain centered initially when the graph fits in the available graph area. Larger diagrams use the viewport offset.
 
 `render_inline`, `render_to_string`, and coordinate-stable `render_to_frame` behavior remain non-interactive.
 
@@ -70,13 +66,10 @@ Fullscreen diagrams remain centered initially when the graph fits in the availab
 
 Interaction logic should stay split so most behavior can be tested without a real terminal.
 
-Covered P0 tests include:
+Covered v0 tests include:
 
 - selection cycling order
 - dummy node skipping
-- viewport pan bounds
-- selected-node ensure-visible behavior
-- cycling through more nodes than fit in an 80x23 graph area while keeping each selected node visible
-- renderer coverage for selected highlight, status bar, and 80x24 reachability
+- renderer coverage for centered app rendering, selected highlight, status bar, and 80x24 reachability
 
 Thin terminal event-loop code can remain lightly tested, but state transitions should be covered.
