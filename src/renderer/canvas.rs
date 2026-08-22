@@ -599,10 +599,11 @@ fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect, theme: &Theme) {
         let source = graph.nodes.iter().find(|n| n.id == edge.source);
         let target = graph.nodes.iter().find(|n| n.id == edge.target);
 
-        if let (Some(src), Some(tgt)) = (source, target) {
-            if node_has_nonnegative_origin(src) && node_has_nonnegative_origin(tgt) {
-                render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes, theme);
-            }
+        if let (Some(src), Some(tgt)) = (source, target)
+            && node_has_nonnegative_origin(src)
+            && node_has_nonnegative_origin(tgt)
+        {
+            render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes, theme);
         }
     }
 }
@@ -657,7 +658,7 @@ fn connection_point(
                     Some((cx, y.saturating_sub(1)))
                 }
             } else {
-                connection_point_heuristic(x, y, w, h, cx, cy, toward_x, toward_y)
+                connection_point_heuristic((x, y, w, h), (cx, cy), (toward_x, toward_y))
             }
         }
         Direction::LeftRight => {
@@ -667,21 +668,16 @@ fn connection_point(
             } else if !is_source && dx < 0 {
                 Some((x.saturating_sub(1), cy))
             } else {
-                connection_point_heuristic(x, y, w, h, cx, cy, toward_x, toward_y)
+                connection_point_heuristic((x, y, w, h), (cx, cy), (toward_x, toward_y))
             }
         }
     }
 }
 
 fn connection_point_heuristic(
-    x: u16,
-    y: u16,
-    w: u16,
-    h: u16,
-    cx: u16,
-    cy: u16,
-    toward_x: u16,
-    toward_y: u16,
+    (x, y, w, h): (u16, u16, u16, u16),
+    (cx, cy): (u16, u16),
+    (toward_x, toward_y): (u16, u16),
 ) -> Option<(u16, u16)> {
     let dx = toward_x as i32 - cx as i32;
     let dy = toward_y as i32 - cy as i32;
@@ -692,12 +688,10 @@ fn connection_point_heuristic(
         } else {
             Some((x.saturating_sub(1), cy))
         }
+    } else if dy > 0 {
+        Some((cx, y + h))
     } else {
-        if dy > 0 {
-            Some((cx, y + h))
-        } else {
-            Some((cx, y.saturating_sub(1)))
-        }
+        Some((cx, y.saturating_sub(1)))
     }
 }
 
@@ -1150,10 +1144,11 @@ fn render_edge(
                 arrow_dx = dx;
                 arrow_dy = dy;
             }
-            if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
-                if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
-                    buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
-                }
+            if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead)
+                && end.0 < buf_area.x + buf_area.width
+                && end.1 < buf_area.y + buf_area.height
+            {
+                buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
             }
         }
 
@@ -1212,13 +1207,17 @@ fn render_edge(
             if edge.style == EdgeStyle::Solid {
                 let corner1 = if end.0 > start.0 {
                     if mid_y >= start.1 { '└' } else { '┌' }
+                } else if mid_y >= start.1 {
+                    '┘'
                 } else {
-                    if mid_y >= start.1 { '┘' } else { '┐' }
+                    '┐'
                 };
                 let corner2 = if start.0 < end.0 {
                     if end.1 >= mid_y { '┐' } else { '┘' }
+                } else if end.1 >= mid_y {
+                    '┌'
                 } else {
-                    if end.1 >= mid_y { '┌' } else { '└' }
+                    '└'
                 };
                 set_cell(buf, start.0, mid_y, corner1, edge_style, all_nodes);
                 set_cell(buf, end.0, mid_y, corner2, edge_style, all_nodes);
@@ -1287,13 +1286,17 @@ fn render_edge(
             if edge.style == EdgeStyle::Solid {
                 let corner1 = if end.1 > start.1 {
                     if mid_x >= start.0 { '┐' } else { '┌' }
+                } else if mid_x >= start.0 {
+                    '┘'
                 } else {
-                    if mid_x >= start.0 { '┘' } else { '└' }
+                    '└'
                 };
                 let corner2 = if start.1 < end.1 {
                     if end.0 >= mid_x { '└' } else { '┘' }
+                } else if end.0 >= mid_x {
+                    '┌'
                 } else {
-                    if end.0 >= mid_x { '┌' } else { '┐' }
+                    '┐'
                 };
                 set_cell(buf, mid_x, start.1, corner1, edge_style, all_nodes);
                 set_cell(buf, mid_x, end.1, corner2, edge_style, all_nodes);
@@ -1335,10 +1338,11 @@ fn render_edge(
         arrow_dy = dy;
     }
 
-    if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead) {
-        if end.0 < buf_area.x + buf_area.width && end.1 < buf_area.y + buf_area.height {
-            buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
-        }
+    if let Some(arrow) = arrowhead_char(arrow_dx, arrow_dy, &edge.arrowhead)
+        && end.0 < buf_area.x + buf_area.width
+        && end.1 < buf_area.y + buf_area.height
+    {
+        buf[(end.0, end.1)].set_char(arrow).set_style(edge_style);
     }
 
     if let Some(ref label) = edge.label {

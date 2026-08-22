@@ -144,8 +144,8 @@ fn topological_order(adjacency: &Adjacency) -> Vec<usize> {
     let mut remaining_parent_count = adjacency.incoming_count_by_node.clone();
     let mut ready_nodes = VecDeque::new();
 
-    for node_index in 0..node_count {
-        if remaining_parent_count[node_index] == 0 {
+    for (node_index, &parent_count) in remaining_parent_count.iter().enumerate() {
+        if parent_count == 0 {
             ready_nodes.push_back(node_index);
         }
     }
@@ -386,13 +386,9 @@ fn sweep_layers_down(
     position_by_node: &mut [usize],
     neighbors: &LayerNeighbors,
 ) {
-    for layer_index in 1..layers.len() {
-        layers[layer_index] = reorder_layer_by_barycenter(
-            &layers[layer_index],
-            &neighbors.parents_by_node,
-            position_by_node,
-        );
-        refresh_positions_for_layer(&layers[layer_index], position_by_node);
+    for layer in layers.iter_mut().skip(1) {
+        *layer = reorder_layer_by_barycenter(layer, &neighbors.parents_by_node, position_by_node);
+        refresh_positions_for_layer(layer, position_by_node);
     }
 }
 
@@ -896,7 +892,7 @@ fn lane_offset(rank: usize) -> f64 {
     if rank == 0 {
         0.0
     } else {
-        let step = (rank + 1) / 2;
+        let step = rank.div_ceil(2);
         if rank % 2 == 1 {
             -(step as f64)
         } else {

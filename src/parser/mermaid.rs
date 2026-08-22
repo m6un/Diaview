@@ -66,7 +66,9 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     })
 }
 
-fn preprocess(input: &str) -> Vec<(usize, String)> {
+type SourceLine = (usize, String);
+
+fn preprocess(input: &str) -> Vec<SourceLine> {
     input
         .lines()
         .enumerate()
@@ -81,9 +83,7 @@ fn preprocess(input: &str) -> Vec<(usize, String)> {
         .collect()
 }
 
-fn parse_header<'a>(
-    lines: &'a [(usize, String)],
-) -> Result<(Direction, &'a [(usize, String)]), String> {
+fn parse_header(lines: &[SourceLine]) -> Result<(Direction, &[SourceLine]), String> {
     let (line_no, first) = &lines[0];
     let tokens: Vec<&str> = first.split_whitespace().collect();
     if tokens.len() < 2 {
@@ -360,10 +360,12 @@ fn find_edge_op(s: &str, op: &str) -> Option<usize> {
             b'}' => depth_curly -= 1,
             _ => {}
         }
-        if depth_square == 0 && depth_paren == 0 && depth_curly == 0 {
-            if &bytes[i..i + op_len] == op_bytes {
-                return Some(i);
-            }
+        if depth_square == 0
+            && depth_paren == 0
+            && depth_curly == 0
+            && &bytes[i..i + op_len] == op_bytes
+        {
+            return Some(i);
         }
         i += 1;
     }

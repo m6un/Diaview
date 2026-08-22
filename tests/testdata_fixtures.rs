@@ -1,7 +1,9 @@
 use diaview::model::*;
 use diaview::testdata::fixtures;
 
-fn phase15_fixtures() -> [(&'static str, fn() -> &'static str); 6] {
+type Fixture = (&'static str, fn() -> &'static str);
+
+fn phase15_fixtures() -> [Fixture; 6] {
     [
         ("fan-in sink", fixtures::phase15_fan_in_sink_mermaid),
         ("fan-out router", fixtures::phase15_fan_out_router_mermaid),
