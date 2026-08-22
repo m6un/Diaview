@@ -1,43 +1,97 @@
 # Diaview
 
-A terminal-native diagram renderer for developers. It parses diagrams into a graph model, lays them out in Rust, and renders polished Ratatui output inline or fullscreen.
+Diaview is a terminal-native diagram renderer for Mermaid flowcharts. It parses a supported Mermaid flowchart subset, lays it out in Rust, and renders it with Ratatui.
 
-## What this repo is
+## Current scope
 
-Diaview is an experiment in making architecture diagrams feel native to the terminal. The current renderer supports Mermaid flowcharts, grouped subgraphs, layout-owned routes, bundled shared sinks, and Ayu Dark-inspired terminal styling.
+Supported today:
 
-Long term, it is meant to become a visual REPL for agent-assisted architecture work: select a node, give an instruction, and send structured graph context back to an AI agent.
+- `graph TD`
+- `graph TB` normalized to top-down
+- `graph LR`
+- `flowchart TD`
+- `flowchart LR`
+- rectangle nodes: `A[text]`
+- rounded nodes: `A(text)`
+- diamond nodes: `A{text}`
+- circle nodes: `A((text))`
+- database/cylinder nodes: `A[(text)]`
+- bare node refs: `A`
+- solid arrows: `-->`
+- solid links without arrows: `---`
+- dashed arrows: `-.->`
+- dashed links without arrows: `-.-`
+- thick arrows: `==>`
+- edge labels: `-->|text|` and `-- text -->`
+- `subgraph` blocks with ids, labels, and membership
+- whole-line comments starting with `%%`
+- semicolon-separated statements
 
-## Architecture
+Not supported yet:
 
-```text
-+---------------+
-| Mermaid input |
-+-------+-------+
-        |
-        v
-+---------------+     +----------+     +------------------+
-|    Parser     | --> | Graph IR | --> | Layout + routing |
-+---------------+     +----------+     +--------+---------+
-                                               |
-                                               v
-                                      +------------------+
-                                      | Ratatui renderer |
-                                      +--------+---------+
-                                               |
-                         +---------------------+---------------------+
-                         |                                           |
-                         v                                           v
-                fullscreen terminal                         inline ANSI output
+- interactive editing or selection
+- agent / Visual REPL features
+- class/style declarations
+- non-flowchart Mermaid diagram types
+- Graphviz / dagre-backed layout
+- general-purpose Mermaid syntax coverage
+
+## Usage
+
+Render fullscreen from a file:
+
+```bash
+cargo run -- fixtures/simple.mmd
 ```
 
-## Run
+Render inline from a file:
 
 ```bash
 cargo run -- --inline fixtures/simple.mmd
+```
+
+Render inline from stdin:
+
+```bash
+cat fixtures/simple.mmd | cargo run -- --inline
+```
+
+## Font requirement
+
+Diaview requires Nerd Fonts v3 glyph support.
+
+Use a patched Nerd Font, or install `Symbols Nerd Font Mono` as a terminal fallback.
+
+On macOS with Homebrew:
+
+```bash
+brew install --cask font-symbols-only-nerd-font
+```
+
+## Development
+
+```bash
+cargo fmt --check
+cargo check
+cargo test
 cargo run -- --inline fixtures/complex_architecture.mmd
 ```
 
+## Current limitations
+
+- terminal-native rendering only
+- no fullscreen interaction yet
+- no hidden layout engine dependency
+- no raster / Kitty graphics output
+- parser and layout support are intentionally narrow
+
 ## Docs
 
-Start with `docs/README.md`, then `docs/architecture.md` and `docs/roadmap.md`.
+- `docs/README.md`
+- `docs/architecture.md`
+- `docs/development.md`
+- `docs/parser.md`
+- `docs/layout.md`
+- `docs/rendering.md`
+- `docs/testing.md`
+- `docs/roadmap.md`
