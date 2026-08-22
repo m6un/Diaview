@@ -2,109 +2,81 @@
 
 Phase 2 turns Diaview from a static renderer into a navigable interactive TUI.
 
-## Goals
+## Implemented P0 behavior
 
-- select nodes
-- inspect node details
-- navigate with keyboard and mouse
-- pan large diagrams
-- later issue actions against selected nodes
+Fullscreen mode now runs a persistent Ratatui event loop:
 
-## Current baseline
+- enter raw mode and alternate screen
+- draw the current frame
+- read a terminal event
+- update app state
+- redraw
+- exit on `q` or `Esc`
 
-Current renderer behavior is still render-once:
+A small terminal guard restores raw mode and alternate screen on Result-based exits.
 
-- fullscreen mode enters alternate screen, renders, then waits for `q`/`Esc`
-- inline mode prints ANSI output to scrollback and exits
-
-There is no persistent app state or selection state yet.
-
-The graph produced after layout already has node coordinates, group bounds, and edge route metadata, which should make Phase 2 navigation and hit-testing easier.
+Inline mode is unchanged: it prints ANSI output to scrollback and exits without raw mode or alternate screen.
 
 ## App state
 
-Expected state includes:
+The terminal-independent state lives in `AppState` and tracks:
 
 - current graph
 - selected node id
-- viewport offset
-- zoom/spacing level
-- interaction mode, e.g. normal vs command input
-- optional status/error messages
+- viewport x/y offset
 
-Example direction:
-
-```rust
-struct AppState {
-    selected_node: Option<String>,
-    viewport_x: i16,
-    viewport_y: i16,
-}
-```
-
-Keep state transitions testable outside the terminal event loop.
+State transitions for selection, panning, pan bounds, and keeping the selected node visible are pure and testable without a real terminal.
 
 ## Selection
 
-Planned selection behavior:
+Implemented controls:
 
-- `Tab` cycles forward through visible/selectable nodes
-- `Shift+Tab` cycles backward
-- arrow keys / `hjkl` move spatially to the nearest node in that direction
-- mouse click selects a node directly
-- selected node gets a strong visual highlight
+- `Tab` cycles forward through selectable nodes
+- `Shift+Tab` / `BackTab` cycles backward
+- order is deterministic by node id
+- dummy routing nodes with ids beginning `__dummy` are never selectable
+- the selected card renders with a strong blue highlight from the existing theme
+- when selection changes, the viewport is adjusted so the selected node remains fully visible when it fits in the viewport
 
-Dummy routing nodes should not be selectable.
+Future work may add groups or edges as selectable targets, but P0 selects real nodes only.
 
-Future selection may include groups and edges, but node selection should land first.
+## Panning
 
-## Event loop
+Implemented controls:
 
-The current render-once behavior should become a persistent Ratatui event loop.
+- left/right/up/down arrows pan the viewport
+- `h`/`j`/`k`/`l` also pan the viewport
+- panning is clamped to graph bounds
+- resize events redraw and keep the current selected node visible
 
-Expected behavior:
-
-- draw current frame
-- poll/read terminal events
-- update app state
-- redraw
-- exit on `q` or configured quit command
-
-Terminal IO should remain thin. Pure functions should handle selection, navigation, viewport updates, and mode transitions.
+Spatial nearest-node navigation, mouse navigation, zoom, and configurable keybindings are not implemented in P0.
 
 ## Status bar
 
-A bottom status bar should show useful context such as:
+Fullscreen mode reserves the bottom terminal row for a concise status bar showing:
 
-- selected node id
-- selected node label
-- shape/type
-- incident edge count or edge classes
-- group membership if present
-- available keybindings
-- current mode
+- selected node id and label, or `no selection`
+- key hints for selection, panning, and quit
 
-## Pan and zoom
+The graph renders in the remaining area above the status bar.
 
-Large diagrams need viewport controls.
+## Rendering notes
 
-Planned controls:
+Fullscreen diagrams remain centered initially when the graph fits in the available graph area. Larger diagrams use the viewport offset.
 
-- pan with directional keys or mouse drag
-- zoom/spacing changes with `+` and `-`
-- keep selected node visible when navigating
+`render_inline`, `render_to_string`, and coordinate-stable `render_to_frame` behavior remain non-interactive.
 
 ## Testing guidance
 
-Interaction logic should be split so most behavior can be tested without a real terminal.
+Interaction logic should stay split so most behavior can be tested without a real terminal.
 
-Good tests:
+Covered P0 tests include:
 
 - selection cycling order
-- spatial navigation target choice
-- viewport offset updates
-- command mode transitions
-- dummy nodes are skipped
-- selected node remains visible after navigation/pan updates
+- dummy node skipping
+- viewport pan bounds
+- selected-node ensure-visible behavior
+- cycling through more nodes than fit in an 80x23 graph area while keeping each selected node visible
+- renderer coverage for selected highlight, status bar, and 80x24 reachability
 
 Thin terminal event-loop code can remain lightly tested, but state transitions should be covered.
