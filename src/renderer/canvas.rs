@@ -14,6 +14,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use crate::app::AppState;
 use crate::model::{
     Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape, PortSide, RoutePlan,
 };
@@ -21,26 +22,73 @@ use crate::stencil::{ArtifactKind, NodeStencil, stencil_for_node};
 use crate::theme::{NodeTheme, Theme};
 
 pub fn render(graph: &Graph) -> io::Result<()> {
-    enable_raw_mode()?;
     let mut out = stdout();
-    execute!(out, EnterAlternateScreen)?;
-
+    let _guard = TerminalGuard::enter(&mut out)?;
     let backend = CrosstermBackend::new(out);
     let mut terminal = Terminal::new(backend)?;
-
-    terminal.draw(|frame| render_centered_to_frame(graph, frame))?;
+    let mut app = AppState::new(graph.clone());
 
     loop {
-        if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') || key.code == KeyCode::Esc {
-                break;
+        terminal.draw(|frame| render_app_to_frame(&mut app, frame))?;
+
+        match event::read()? {
+            Event::Key(key) => match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => break,
+                KeyCode::Tab => {
+                    let area = terminal_graph_area(&terminal)?;
+                    app.select_next(area.width, area.height);
+                }
+                KeyCode::BackTab => {
+                    let area = terminal_graph_area(&terminal)?;
+                    app.select_prev(area.width, area.height);
+                }
+                KeyCode::Left | KeyCode::Char('h') => {
+                    let area = terminal_graph_area(&terminal)?;
+                    app.pan_by(-2, 0, area.width, area.height);
+                }
+                KeyCode::Right | KeyCode::Char('l') => {
+                    let area = terminal_graph_area(&terminal)?;
+                    app.pan_by(2, 0, area.width, area.height);
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let area = terminal_graph_area(&terminal)?;
+                    app.pan_by(0, -1, area.width, area.height);
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let area = terminal_graph_area(&terminal)?;
+                    app.pan_by(0, 1, area.width, area.height);
+                }
+                _ => {}
+            },
+            Event::Resize(width, height) => {
+                let area = graph_area(Rect::new(0, 0, width, height));
+                app.ensure_selected_visible(area.width, area.height);
             }
+            _ => {}
         }
     }
 
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     Ok(())
+}
+
+struct TerminalGuard;
+
+impl TerminalGuard {
+    fn enter(out: &mut io::Stdout) -> io::Result<Self> {
+        enable_raw_mode()?;
+        if let Err(err) = execute!(out, EnterAlternateScreen) {
+            let _ = disable_raw_mode();
+            return Err(err);
+        }
+        Ok(Self)
+    }
+}
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = execute!(stdout(), LeaveAlternateScreen);
+    }
 }
 
 pub fn render_inline(graph: &Graph) -> io::Result<()> {
@@ -200,8 +248,53 @@ pub fn render_to_frame(graph: &Graph, frame: &mut Frame) {
 pub fn render_to_frame_with_theme(graph: &Graph, frame: &mut Frame, theme: &Theme) {
     let area = frame.area();
     if area.width > 0 && area.height > 0 {
-        render_graph(graph, frame, area, theme);
+        render_graph(graph, frame, area, theme, None);
     }
+}
+
+pub fn render_app_to_frame(app: &mut AppState, frame: &mut Frame) {
+    let theme = Theme::default();
+    render_app_to_frame_with_theme(app, frame, &theme);
+}
+
+pub fn render_app_to_frame_with_theme(app: &mut AppState, frame: &mut Frame, theme: &Theme) {
+    let area = frame.area();
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+
+    let graph_area = graph_area(area);
+    app.ensure_selected_visible(graph_area.width, graph_area.height);
+    let mut graph = app.graph.clone();
+    let (graph_width, graph_height) = graph_bounds(&graph);
+    let offset_x = if graph_width <= graph_area.width {
+        graph_area.x as i32 + graph_area.width.saturating_sub(graph_width) as i32 / 2
+    } else {
+        graph_area.x as i32 - app.viewport_x as i32
+    };
+    let offset_y = if graph_height <= graph_area.height {
+        graph_area.y as i32 + graph_area.height.saturating_sub(graph_height) as i32 / 2
+    } else {
+        graph_area.y as i32 - app.viewport_y as i32
+    };
+    translate_graph(&mut graph, offset_x as f64, offset_y as f64);
+    render_graph(
+        &graph,
+        frame,
+        graph_area,
+        theme,
+        app.selected_node.as_deref(),
+    );
+    render_status_bar(app, frame, area, theme);
+}
+
+fn graph_area(area: Rect) -> Rect {
+    Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1))
+}
+
+fn terminal_graph_area<B: ratatui::backend::Backend>(terminal: &Terminal<B>) -> io::Result<Rect> {
+    let size = terminal.size()?;
+    Ok(graph_area(Rect::new(0, 0, size.width, size.height)))
 }
 
 pub fn render_centered_to_frame(graph: &Graph, frame: &mut Frame) {
@@ -220,11 +313,11 @@ pub fn render_centered_to_frame_with_theme(graph: &Graph, frame: &mut Frame, the
     let offset_y = area.y + area.height.saturating_sub(graph_height) / 2;
 
     if offset_x == 0 && offset_y == 0 {
-        render_graph(graph, frame, area, theme);
+        render_graph(graph, frame, area, theme, None);
     } else {
         let mut centered = graph.clone();
         translate_graph(&mut centered, offset_x as f64, offset_y as f64);
-        render_graph(&centered, frame, area, theme);
+        render_graph(&centered, frame, area, theme, None);
     }
 }
 
@@ -257,7 +350,13 @@ fn translate_graph(graph: &mut Graph, offset_x: f64, offset_y: f64) {
     }
 }
 
-fn render_graph(graph: &Graph, frame: &mut Frame, area: Rect, theme: &Theme) {
+fn render_graph(
+    graph: &Graph,
+    frame: &mut Frame,
+    area: Rect,
+    theme: &Theme,
+    selected_node: Option<&str>,
+) {
     for group in &graph.groups {
         render_group(group, frame, area, theme);
     }
@@ -267,10 +366,28 @@ fn render_graph(graph: &Graph, frame: &mut Frame, area: Rect, theme: &Theme) {
     }
 
     for node in &graph.nodes {
-        render_node(node, frame, area, theme);
+        render_node(
+            node,
+            frame,
+            area,
+            theme,
+            selected_node == Some(node.id.as_str()),
+        );
     }
 
     render_edges(graph, frame, area, theme);
+}
+
+fn render_status_bar(app: &AppState, frame: &mut Frame, area: Rect, theme: &Theme) {
+    let y = area.bottom().saturating_sub(1);
+    let rect = Rect::new(area.x, y, area.width, 1);
+    let selected = app
+        .selected_node()
+        .map(|node| format!("{} {}", node.id, node.label))
+        .unwrap_or_else(|| "no selection".to_string());
+    let text = format!(" {selected} | Tab/Shift+Tab select | arrows/hjkl pan | q quit");
+    let bar = Paragraph::new(text).style(Style::default().fg(theme.text).bg(theme.accent_primary));
+    frame.render_widget(bar, rect);
 }
 
 fn render_group(group: &Group, frame: &mut Frame, area: Rect, theme: &Theme) {
@@ -355,7 +472,7 @@ fn render_node_shadow(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme)
     }
 }
 
-fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
+fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme, selected: bool) {
     if node.id.starts_with("__dummy") {
         return;
     }
@@ -366,7 +483,12 @@ fn render_node(node: &Node, frame: &mut Frame, area: Rect, theme: &Theme) {
     };
 
     let stencil = stencil_for_node(node);
-    let node_theme = node_theme_for(node, stencil, theme);
+    let mut node_theme = node_theme_for(node, stencil, theme);
+    if selected {
+        node_theme.fill = theme.accent_primary;
+        node_theme.text = Color::White;
+        node_theme.icon = Color::White;
+    }
     frame
         .buffer_mut()
         .set_style(rect, Style::default().bg(node_theme.fill));
@@ -478,16 +600,24 @@ fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect, theme: &Theme) {
         let target = graph.nodes.iter().find(|n| n.id == edge.target);
 
         if let (Some(src), Some(tgt)) = (source, target) {
-            render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes, theme);
+            if node_has_nonnegative_origin(src) && node_has_nonnegative_origin(tgt) {
+                render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes, theme);
+            }
         }
     }
 }
 
 fn node_center(node: &Node) -> Option<(u16, u16)> {
     match (node.x, node.y, node.width, node.height) {
-        (Some(x), Some(y), Some(w), Some(h)) => Some(((x + w / 2.0) as u16, (y + h / 2.0) as u16)),
+        (Some(x), Some(y), Some(w), Some(h)) if x >= 0.0 && y >= 0.0 => {
+            Some(((x + w / 2.0) as u16, (y + h / 2.0) as u16))
+        }
         _ => None,
     }
+}
+
+fn node_has_nonnegative_origin(node: &Node) -> bool {
+    matches!((node.x, node.y), (Some(x), Some(y)) if x >= 0.0 && y >= 0.0)
 }
 
 fn connection_point(

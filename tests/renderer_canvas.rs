@@ -1,6 +1,8 @@
+use diaview::app::AppState;
 use diaview::model::*;
 use diaview::renderer::canvas::{
-    render_centered_to_frame, render_to_frame, render_to_frame_with_theme, render_to_string,
+    render_app_to_frame, render_centered_to_frame, render_to_frame, render_to_frame_with_theme,
+    render_to_string,
 };
 use diaview::theme::Theme;
 use ratatui::Terminal;
@@ -314,6 +316,54 @@ fn test_graph_is_centered_in_a_larger_viewport() {
 
     assert!(min_x.abs_diff(79 - max_x) <= 2);
     assert!(min_y.abs_diff(23 - max_y) <= 2);
+}
+
+#[test]
+fn test_app_renderer_highlights_selection_and_status_bar() {
+    let graph = test_graph();
+    let mut app = AppState::new(graph);
+    let theme = Theme::default();
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    assert!(cell_text(buf, 0, 23, 80).contains("A Start"));
+    assert!(cell_text(buf, 0, 23, 80).contains("Tab/Shift+Tab"));
+    assert_eq!(buf[(36, 6)].bg, theme.accent_primary);
+}
+
+#[test]
+fn test_app_renderer_can_reach_second_node_in_80x24() {
+    let graph = test_graph();
+    let mut app = AppState::new(graph);
+    app.select_next(80, 23);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_app_to_frame(&mut app, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    let screen = buffer_text(buf);
+    assert!(cell_text(buf, 0, 23, 80).contains("B End"));
+    assert!(screen.contains("Start"));
+    assert!(screen.contains("End"));
+}
+
+fn cell_text(buf: &ratatui::buffer::Buffer, x: u16, y: u16, width: u16) -> String {
+    (x..x + width)
+        .map(|x| buf[(x, y)].symbol().to_string())
+        .collect()
+}
+
+fn buffer_text(buf: &ratatui::buffer::Buffer) -> String {
+    (0..buf.area.height)
+        .map(|y| cell_text(buf, 0, y, buf.area.width))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[test]
