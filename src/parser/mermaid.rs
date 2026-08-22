@@ -15,33 +15,40 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     let mut groups: Vec<Group> = Vec::new();
     let mut group_stack: Vec<usize> = Vec::new();
 
-    let mut statements: Vec<String> = Vec::new();
-    for line in rest {
+    let mut statements: Vec<(String, usize)> = Vec::new();
+    for (line_no, line) in rest {
         for part in line.split(';') {
             let s = part.trim().to_string();
             if !s.is_empty() {
-                statements.push(s);
+                statements.push((s, *line_no));
             }
         }
     }
 
-    for stmt in &statements {
-        if let Some(group) =
-            parse_subgraph_start(stmt, group_stack.last().map(|&idx| groups[idx].id.clone()))?
-        {
+    for (stmt, line_no) in &statements {
+        if is_ignored_directive(stmt) {
+            continue;
+        }
+
+        if let Some(group) = parse_subgraph_start(
+            stmt,
+            group_stack.last().map(|&idx| groups[idx].id.clone()),
+            *line_no,
+        )? {
             groups.push(group);
             group_stack.push(groups.len() - 1);
             continue;
         }
 
         if stmt.eq_ignore_ascii_case("end") {
-            group_stack
-                .pop()
-                .ok_or_else(|| "unexpected 'end' without matching subgraph".to_string())?;
+            group_stack.pop().ok_or_else(|| {
+                format!("line {line_no}: unexpected 'end' without matching subgraph")
+            })?;
             continue;
         }
 
-        let parsed_node_ids = parse_statement(stmt, &mut nodes, &mut node_map, &mut edges)?;
+        let parsed_node_ids = parse_statement(stmt, &mut nodes, &mut node_map, &mut edges)
+            .map_err(|err| format!("line {line_no}: {err}"))?;
         if let Some(&group_idx) = group_stack.last() {
             add_group_members(&mut groups[group_idx], parsed_node_ids);
         }
@@ -59,34 +66,56 @@ pub fn parse(input: &str) -> Result<Graph, String> {
     })
 }
 
-fn preprocess(input: &str) -> Vec<String> {
+fn preprocess(input: &str) -> Vec<(usize, String)> {
     input
         .lines()
-        .map(|l| l.trim())
-        .filter(|l| !l.is_empty() && !l.starts_with("%%"))
-        .map(|l| l.to_string())
+        .enumerate()
+        .filter_map(|(idx, line)| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with("%%") {
+                None
+            } else {
+                Some((idx + 1, line.to_string()))
+            }
+        })
         .collect()
 }
 
-fn parse_header<'a>(lines: &'a [String]) -> Result<(Direction, &'a [String]), String> {
-    let first = &lines[0];
+fn parse_header<'a>(
+    lines: &'a [(usize, String)],
+) -> Result<(Direction, &'a [(usize, String)]), String> {
+    let (line_no, first) = &lines[0];
     let tokens: Vec<&str> = first.split_whitespace().collect();
     if tokens.len() < 2 {
-        return Err(format!("invalid header: '{first}'"));
+        return Err(format!("line {line_no}: invalid header: '{first}'"));
     }
     let keyword = tokens[0].to_lowercase();
     if keyword != "graph" && keyword != "flowchart" {
         return Err(format!(
-            "expected 'graph' or 'flowchart', got '{}'",
+            "line {line_no}: expected 'graph' or 'flowchart', got '{}'",
             tokens[0]
         ));
     }
     let dir = match tokens[1] {
         "TD" | "TB" => Direction::TopDown,
         "LR" => Direction::LeftRight,
-        other => return Err(format!("unsupported direction: '{other}'")),
+        other => return Err(format!("line {line_no}: unsupported direction: '{other}'")),
     };
     Ok((dir, &lines[1..]))
+}
+
+fn is_ignored_directive(stmt: &str) -> bool {
+    let lower = stmt.to_ascii_lowercase();
+    lower.starts_with("classdef ")
+        || lower == "classdef"
+        || lower.starts_with("class ")
+        || lower == "class"
+        || lower.starts_with("linkstyle ")
+        || lower == "linkstyle"
+        || lower.starts_with("style ")
+        || lower == "style"
+        || lower.starts_with("click ")
+        || lower == "click"
 }
 
 fn parse_statement(
@@ -112,13 +141,17 @@ fn parse_statement(
     }
 }
 
-fn parse_subgraph_start(stmt: &str, parent: Option<String>) -> Result<Option<Group>, String> {
+fn parse_subgraph_start(
+    stmt: &str,
+    parent: Option<String>,
+    line_no: usize,
+) -> Result<Option<Group>, String> {
     let Some(rest) = stmt.strip_prefix("subgraph") else {
         return Ok(None);
     };
     let rest = rest.trim();
     if rest.is_empty() {
-        return Err("subgraph missing id or label".into());
+        return Err(format!("line {line_no}: subgraph missing id or label"));
     }
 
     let (id, label) = if let Some(open) = rest.find('[') {
@@ -126,14 +159,14 @@ fn parse_subgraph_start(stmt: &str, parent: Option<String>) -> Result<Option<Gro
         validate_id(id)?;
         let close = rest
             .rfind(']')
-            .ok_or_else(|| format!("unclosed '[' in subgraph '{stmt}'"))?;
+            .ok_or_else(|| format!("line {line_no}: unclosed '[' in subgraph '{stmt}'"))?;
         (id.to_string(), rest[open + 1..close].trim().to_string())
     } else if let Some(open) = rest.find('(') {
         let id = rest[..open].trim();
         validate_id(id)?;
         let close = rest
             .rfind(')')
-            .ok_or_else(|| format!("unclosed '(' in subgraph '{stmt}'"))?;
+            .ok_or_else(|| format!("line {line_no}: unclosed '(' in subgraph '{stmt}'"))?;
         (id.to_string(), rest[open + 1..close].trim().to_string())
     } else {
         (rest.to_string(), rest.to_string())
