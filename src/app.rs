@@ -1,4 +1,4 @@
-use crate::model::{Graph, Node};
+use crate::model::{Direction, Graph, Node};
 
 #[derive(Debug, Clone)]
 pub struct AppState {
@@ -46,14 +46,30 @@ impl AppState {
 }
 
 pub fn selectable_ids(graph: &Graph) -> Vec<String> {
-    let mut ids: Vec<String> = graph
+    let mut nodes: Vec<&Node> = graph
         .nodes
         .iter()
         .filter(|node| !node.id.starts_with("__dummy"))
-        .map(|node| node.id.clone())
         .collect();
-    ids.sort();
-    ids
+
+    nodes.sort_by(|a, b| match graph.direction {
+        Direction::TopDown => coord(a.y)
+            .total_cmp(&coord(b.y))
+            .then_with(|| coord(a.x).total_cmp(&coord(b.x)))
+            .then_with(|| a.id.cmp(&b.id)),
+        Direction::LeftRight => coord(a.x)
+            .total_cmp(&coord(b.x))
+            .then_with(|| coord(a.y).total_cmp(&coord(b.y)))
+            .then_with(|| a.id.cmp(&b.id)),
+    });
+
+    nodes.into_iter().map(|node| node.id.clone()).collect()
+}
+
+fn coord(value: Option<f64>) -> f64 {
+    value
+        .filter(|value| value.is_finite())
+        .unwrap_or(f64::INFINITY)
 }
 
 #[cfg(test)]
@@ -73,9 +89,9 @@ mod tests {
         }
     }
 
-    fn graph(nodes: Vec<Node>) -> Graph {
+    fn graph(direction: Direction, nodes: Vec<Node>) -> Graph {
         Graph {
-            direction: Direction::TopDown,
+            direction,
             nodes,
             edges: Vec::<Edge>::new(),
             groups: vec![],
@@ -83,12 +99,43 @@ mod tests {
     }
 
     #[test]
-    fn selection_cycles_by_id() {
-        let mut app = AppState::new(graph(vec![node("B", 0.0, 0.0), node("A", 0.0, 5.0)]));
-        assert_eq!(app.selected_node.as_deref(), Some("A"));
-        app.select_next();
+    fn top_down_selection_follows_visual_order() {
+        let app = AppState::new(graph(
+            Direction::TopDown,
+            vec![
+                node("A", 10.0, 10.0),
+                node("B", 0.0, 0.0),
+                node("C", 5.0, 0.0),
+            ],
+        ));
+
+        assert_eq!(selectable_ids(&app.graph), vec!["B", "C", "A"]);
         assert_eq!(app.selected_node.as_deref(), Some("B"));
-        app.select_next();
+    }
+
+    #[test]
+    fn left_right_selection_follows_visual_order() {
+        let app = AppState::new(graph(
+            Direction::LeftRight,
+            vec![
+                node("A", 10.0, 10.0),
+                node("B", 0.0, 5.0),
+                node("C", 0.0, 0.0),
+            ],
+        ));
+
+        assert_eq!(selectable_ids(&app.graph), vec!["C", "B", "A"]);
+        assert_eq!(app.selected_node.as_deref(), Some("C"));
+    }
+
+    #[test]
+    fn reverse_cycles_through_same_order() {
+        let mut app = AppState::new(graph(
+            Direction::TopDown,
+            vec![node("A", 10.0, 10.0), node("B", 0.0, 0.0)],
+        ));
+
+        app.select_prev();
         assert_eq!(app.selected_node.as_deref(), Some("A"));
         app.select_prev();
         assert_eq!(app.selected_node.as_deref(), Some("B"));
@@ -96,9 +143,27 @@ mod tests {
 
     #[test]
     fn dummy_nodes_are_skipped() {
-        let mut app = AppState::new(graph(vec![node("__dummy0", 0.0, 0.0), node("A", 0.0, 5.0)]));
+        let mut app = AppState::new(graph(
+            Direction::TopDown,
+            vec![node("__dummy0", 0.0, 0.0), node("A", 0.0, 5.0)],
+        ));
         assert_eq!(app.selected_node.as_deref(), Some("A"));
         app.select_next();
         assert_eq!(app.selected_node.as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn missing_and_non_finite_coordinates_fall_back_to_id() {
+        let mut missing = node("B", 0.0, 0.0);
+        missing.y = None;
+        let mut non_finite = node("A", 0.0, 0.0);
+        non_finite.y = Some(f64::NAN);
+
+        let graph = graph(
+            Direction::TopDown,
+            vec![missing, non_finite, node("C", 0.0, 0.0)],
+        );
+
+        assert_eq!(selectable_ids(&graph), vec!["C", "A", "B"]);
     }
 }

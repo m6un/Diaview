@@ -43,7 +43,7 @@ Implemented controls:
 
 - `Tab` cycles forward through selectable nodes
 - `Shift+Tab` / `BackTab` cycles backward
-- order is deterministic by node id
+- order follows rendered flow: top-to-bottom for TB/TD graphs, left-to-right for LR graphs
 - dummy routing nodes with ids beginning `__dummy` are never selectable
 - the selected card renders with a strong blue highlight from the existing theme
 
