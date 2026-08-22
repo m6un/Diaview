@@ -56,6 +56,10 @@ Render inline from stdin:
 cat fixtures/simple.mmd | cargo run -- --inline
 ```
 
+## License
+
+Diaview is dual-licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE).
+
 ## Font requirement
 
 Diaview requires Nerd Fonts v3 glyph support.
