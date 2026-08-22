@@ -4,6 +4,12 @@ fn bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_diaview"))
 }
 
+fn bin_without_herdr_env() -> Command {
+    let mut command = bin();
+    command.env_remove("HERDR_PANE_ID");
+    command
+}
+
 fn simple_diagram() -> &'static str {
     "flowchart TD\n    A-->B\n"
 }
@@ -98,6 +104,37 @@ fn duplicate_input_rejected() {
         .unwrap();
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("Only one input"));
+}
+
+#[test]
+fn herdr_requires_file_argument() {
+    let output = bin_without_herdr_env().arg("--herdr").output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("requires a Mermaid file"));
+}
+
+#[test]
+fn herdr_rejects_stdin() {
+    let output = bin_without_herdr_env()
+        .args(["--herdr", "-"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("cannot use stdin"));
+}
+
+#[test]
+fn herdr_requires_pane_env() {
+    let dir = tempfile_dir();
+    let path = dir.join("diagram.mmd");
+    std::fs::write(&path, simple_diagram()).unwrap();
+
+    let output = bin_without_herdr_env()
+        .args(["--herdr", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("HERDR_PANE_ID missing"));
 }
 
 #[test]
