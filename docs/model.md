@@ -81,12 +81,14 @@ Layout writes route metadata onto edges so the renderer does not have to invent 
 
 `RoutePlan` includes:
 
-- ordered `points: Vec<RoutePoint>`
+- ordered, renderer-ready `points: Vec<RoutePoint>`
 - `source_port: Port`
 - `target_port: Port`
 - `lane_id: Option<usize>`
 - `class: EdgeClass`
 - `label_anchor: Option<RoutePoint>`
+
+The ordered points start at the source port, include its one-cell outward stub, remain orthogonal and clear of node cells, include the target's one-cell outward tail, and end at the target port.
 
 `Port` contains an `(x, y)` position plus a `PortSide`:
 

@@ -1,0 +1,17 @@
+flowchart TD
+    ENTRY[Client + API] --> CHECK[Temporal: validate + idempotency]
+    CHECK --> INTENT[Create intent + save pending]
+    INTENT --> WAIT[Wait signal]
+    WAIT --> RESULT{Result?}
+    RESULT -->|ok| PAID[Paid]
+    RESULT -->|fail/timeout| FAILED[Failed]
+    PAID --> ENTRY
+    FAILED --> ENTRY
+    CHECK --> KEY[Key store]
+    INTENT --> STRIPE[Stripe]
+    INTENT --> DB[DB]
+    PAID --> DB
+    FAILED --> DB
+    STRIPE -.-> HOOK[Webhook]
+    HOOK --> VERIFY[Verify sig]
+    VERIFY --> WAIT

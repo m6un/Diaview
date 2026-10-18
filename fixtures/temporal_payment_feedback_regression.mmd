@@ -1,0 +1,16 @@
+flowchart TD
+    CLIENT[Client] -->|POST /payments| API[Payments API]
+    API --> AUTH[Auth check]
+    API --> VALIDATE[Validate request]
+    API --> IDEMPOTENCY[Idempotency key check]
+    API --> RESPONSE[Format response]
+    AUTH --> API
+    VALIDATE --> API
+    IDEMPOTENCY --> API
+    API -->|start payment workflow| WORKFLOW[Temporal Workflow]
+    WORKFLOW -->|create PaymentIntent| STRIPE[Stripe API]
+    WORKFLOW -->|persist state| DB[Payment DB]
+    STRIPE -.->|payment_succeeded| WEBHOOK[Stripe Webhook Handler]
+    WEBHOOK -->|signal workflow| WORKFLOW
+    WORKFLOW -->|final status| API
+    RESPONSE --> CLIENT

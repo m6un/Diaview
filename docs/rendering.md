@@ -59,16 +59,16 @@ Edges should be readable on a fixed-width character grid.
 
 Renderer responsibilities include:
 
-- consuming layout-owned `RoutePlan`s when available
+- consuming complete layout-owned `RoutePlan` geometry when available
 - falling back to local routing only when an edge has no route metadata
 - converting route segments to box/line glyphs
 - merging solid edge junctions where routes share cells
 - placing arrowheads at target ports
 - drawing dashed/dotted distinctions
-- drawing labels at route-provided label anchors
+- drawing labels at route-provided label anchors after edge glyphs
 - avoiding node interiors
 
-Layout owns route decisions such as ports, lanes, edge class, perimeter routes, and label anchors. Renderer should not reintroduce global routing policy.
+Layout owns route decisions such as ports, one-cell endpoint stubs, lanes, edge class, perimeter routes, and label anchors. For routed edges, the renderer rounds and paints `RoutePlan.points`; it does not add bends or endpoint stubs. Renderer should not reintroduce global routing policy.
 
 ## Inline rendering
 
