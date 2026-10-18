@@ -9,6 +9,116 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::style::Color;
 
+#[test]
+fn test_routed_label_paints_at_exact_supplied_anchor_row() {
+    let graph = Graph {
+        direction: Direction::TopDown,
+        nodes: vec![
+            Node {
+                id: "A".into(),
+                label: "Start".into(),
+                shape: NodeShape::RoundedRect,
+                x: Some(3.0),
+                y: Some(1.0),
+                width: Some(11.0),
+                height: Some(3.0),
+            },
+            Node {
+                id: "B".into(),
+                label: "End".into(),
+                shape: NodeShape::RoundedRect,
+                x: Some(3.0),
+                y: Some(8.0),
+                width: Some(11.0),
+                height: Some(3.0),
+            },
+        ],
+        edges: vec![
+            Edge {
+                source: "A".into(),
+                target: "B".into(),
+                label: Some("next".into()),
+                style: EdgeStyle::Solid,
+                arrowhead: Arrowhead::Normal,
+                route: Some(RoutePlan {
+                    points: vec![
+                        RoutePoint { x: 10.0, y: 4.0 },
+                        RoutePoint { x: 10.0, y: 8.0 },
+                    ],
+                    source_port: Port {
+                        x: 10.0,
+                        y: 4.0,
+                        side: PortSide::Bottom,
+                    },
+                    target_port: Port {
+                        x: 10.0,
+                        y: 8.0,
+                        side: PortSide::Top,
+                    },
+                    lane_id: None,
+                    class: EdgeClass::Primary,
+                    label_anchor: Some(RoutePoint { x: 10.0, y: 6.0 }),
+                }),
+            },
+            Edge {
+                source: "B".into(),
+                target: "A".into(),
+                label: Some("step".into()),
+                style: EdgeStyle::Solid,
+                arrowhead: Arrowhead::Normal,
+                route: Some(RoutePlan {
+                    points: vec![
+                        RoutePoint { x: 13.0, y: 4.0 },
+                        RoutePoint { x: 13.0, y: 8.0 },
+                    ],
+                    source_port: Port {
+                        x: 13.0,
+                        y: 4.0,
+                        side: PortSide::Bottom,
+                    },
+                    target_port: Port {
+                        x: 13.0,
+                        y: 8.0,
+                        side: PortSide::Top,
+                    },
+                    lane_id: None,
+                    class: EdgeClass::Primary,
+                    // Anchor x=13 centers "step" at cols 11..15, overlapping the
+                    // "next" label footprint at col 11 on the same row 5.
+                    // Renderer relocation would push "step" to row 4 or 6.
+                    label_anchor: Some(RoutePoint { x: 13.0, y: 6.0 }),
+                }),
+            },
+        ],
+        groups: vec![],
+    };
+
+    let backend = TestBackend::new(40, 16);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_to_frame(&graph, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    let row = |y: u16| {
+        (0..buf.area.width)
+            .map(|x| buf[(x, y)].symbol())
+            .collect::<String>()
+    };
+    // ly = 6 - 1 = 5: both labels must paint at the exact anchor row.
+    assert!(
+        row(5).contains("step"),
+        "routed label must paint at exact anchor row 5, got: {:?}",
+        row(5)
+    );
+    assert!(
+        !row(4).contains("step") && !row(6).contains("step"),
+        "label must not be relocated to adjacent rows"
+    );
+    // Node overwrite safety: node card cells remain intact.
+    assert!(row(2).contains("Start"), "node label must stay visible");
+}
+
 const DIR_UP: u8 = 0b0001;
 const DIR_DOWN: u8 = 0b0010;
 const DIR_LEFT: u8 = 0b0100;
@@ -35,72 +145,15 @@ fn rounded_point(x: f64, y: f64) -> (u16, u16) {
     (x.max(0.0).round() as u16, y.max(0.0).round() as u16)
 }
 
-fn outward_delta(side: &PortSide) -> (i32, i32) {
-    match side {
-        PortSide::Top => (0, -1),
-        PortSide::Right => (1, 0),
-        PortSide::Bottom => (0, 1),
-        PortSide::Left => (-1, 0),
-    }
-}
-
-fn offset_point(point: (u16, u16), delta: (i32, i32)) -> (u16, u16) {
-    (
-        (point.0 as i32 + delta.0).max(0) as u16,
-        (point.1 as i32 + delta.1).max(0) as u16,
-    )
-}
-
-fn push_distinct(points: &mut Vec<(u16, u16)>, point: (u16, u16)) {
-    if points.last().copied() != Some(point) {
-        points.push(point);
-    }
-}
-
 fn routed_render_points(route: &RoutePlan) -> Vec<(u16, u16)> {
-    let source_port = rounded_point(route.source_port.x, route.source_port.y);
-    let target_port = rounded_point(route.target_port.x, route.target_port.y);
-
-    let mut points = Vec::new();
-    push_distinct(&mut points, source_port);
-    for point in &route.points {
-        push_distinct(&mut points, rounded_point(point.x, point.y));
-    }
-    push_distinct(&mut points, target_port);
-
-    if points.is_empty() {
-        return points;
-    }
-
-    let source_stub = offset_point(points[0], outward_delta(&route.source_port.side));
-    if points.get(1).copied() != Some(source_stub) {
-        points.insert(1, source_stub);
-    }
-
-    let target_index = points.len() - 1;
-    let target_tail = offset_point(points[target_index], outward_delta(&route.target_port.side));
-    if target_index == 0 || points.get(target_index - 1).copied() != Some(target_tail) {
-        points.insert(target_index, target_tail);
-
-        let tail_index = points.len() - 2;
-        if tail_index > 0 {
-            let prev = points[tail_index - 1];
-            let tail = points[tail_index];
-            if prev.0 != tail.0 && prev.1 != tail.1 {
-                let pre_tail = match route.target_port.side {
-                    PortSide::Top | PortSide::Bottom => (prev.0, tail.1),
-                    PortSide::Left | PortSide::Right => (tail.0, prev.1),
-                };
-                if pre_tail != prev && pre_tail != tail {
-                    points.insert(tail_index, pre_tail);
-                }
-            }
-        }
-    }
-
+    let mut points: Vec<_> = route
+        .points
+        .iter()
+        .map(|point| rounded_point(point.x, point.y))
+        .collect();
+    points.dedup();
     points
 }
-
 fn graph_bounds(graph: &Graph) -> (u16, u16) {
     let mut max_x = 1.0_f64;
     let mut max_y = 1.0_f64;
@@ -147,6 +200,8 @@ fn graph_bounds(graph: &Graph) -> (u16, u16) {
     (max_x.ceil() as u16, max_y.ceil() as u16)
 }
 
+const TEMPORAL_LAYOUT_REGRESSION: &str = include_str!("../fixtures/temporal_layout_regression.mmd");
+
 fn test_graph() -> Graph {
     Graph {
         direction: Direction::TopDown,
@@ -179,6 +234,49 @@ fn test_graph() -> Graph {
             route: None,
         }],
         groups: vec![],
+    }
+}
+
+#[test]
+fn temporal_edges_do_not_overwrite_node_card_cells() {
+    let mut graph = diaview::parser::mermaid::parse(TEMPORAL_LAYOUT_REGRESSION).unwrap();
+    diaview::layout::layout(&mut graph);
+    let mut cards_only = graph.clone();
+    cards_only.edges.clear();
+    let (width, height) = graph_bounds(&graph);
+
+    let backend = TestBackend::new(width, height);
+    let mut rendered = Terminal::new(backend).unwrap();
+    rendered
+        .draw(|frame| render_to_frame(&graph, frame))
+        .unwrap();
+    let backend = TestBackend::new(width, height);
+    let mut expected = Terminal::new(backend).unwrap();
+    expected
+        .draw(|frame| render_to_frame(&cards_only, frame))
+        .unwrap();
+
+    for node in graph
+        .nodes
+        .iter()
+        .filter(|node| !node.id.starts_with("__dummy"))
+    {
+        let (x, y, node_width, node_height) = (
+            node.x.unwrap() as u16,
+            node.y.unwrap() as u16,
+            node.width.unwrap() as u16,
+            node.height.unwrap() as u16,
+        );
+        for py in y..y + node_height {
+            for px in x..x + node_width {
+                assert_eq!(
+                    &rendered.backend().buffer()[(px, py)],
+                    &expected.backend().buffer()[(px, py)],
+                    "edge rendering changed node {} at ({px}, {py})",
+                    node.id
+                );
+            }
+        }
     }
 }
 
@@ -560,7 +658,9 @@ fn test_single_dashed_and_dotted_routed_bends_use_corner_glyphs() {
                 route: Some(RoutePlan {
                     points: vec![
                         RoutePoint { x: 2.0, y: 2.0 },
+                        RoutePoint { x: 3.0, y: 2.0 },
                         RoutePoint { x: 6.0, y: 2.0 },
+                        RoutePoint { x: 6.0, y: 4.0 },
                         RoutePoint { x: 6.0, y: 5.0 },
                     ],
                     source_port: Port {
@@ -634,8 +734,10 @@ fn test_routed_top_port_arrowhead_has_immediate_tail_cell() {
             route: Some(RoutePlan {
                 points: vec![
                     RoutePoint { x: 5.0, y: 4.0 },
-                    RoutePoint { x: 20.0, y: 4.0 },
-                    RoutePoint { x: 20.0, y: 7.0 },
+                    RoutePoint { x: 5.0, y: 5.0 },
+                    RoutePoint { x: 20.0, y: 5.0 },
+                    RoutePoint { x: 20.0, y: 6.0 },
+                    RoutePoint { x: 13.0, y: 6.0 },
                     RoutePoint { x: 13.0, y: 7.0 },
                 ],
                 source_port: Port {
@@ -708,7 +810,9 @@ fn test_routed_bottom_source_port_gets_vertical_stub_before_horizontal_turn() {
             route: Some(RoutePlan {
                 points: vec![
                     RoutePoint { x: 5.0, y: 4.0 },
-                    RoutePoint { x: 15.0, y: 4.0 },
+                    RoutePoint { x: 5.0, y: 5.0 },
+                    RoutePoint { x: 15.0, y: 5.0 },
+                    RoutePoint { x: 15.0, y: 6.0 },
                     RoutePoint { x: 15.0, y: 7.0 },
                 ],
                 source_port: Port {
@@ -776,7 +880,9 @@ fn test_dotted_telemetry_routed_edge_starts_at_source_port() {
             route: Some(RoutePlan {
                 points: vec![
                     RoutePoint { x: 5.0, y: 4.0 },
-                    RoutePoint { x: 15.0, y: 4.0 },
+                    RoutePoint { x: 5.0, y: 5.0 },
+                    RoutePoint { x: 15.0, y: 5.0 },
+                    RoutePoint { x: 15.0, y: 6.0 },
                     RoutePoint { x: 15.0, y: 7.0 },
                 ],
                 source_port: Port {

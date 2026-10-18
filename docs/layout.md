@@ -19,12 +19,13 @@ It includes:
 - route metadata with edge classes, port sides, lane ids, route points, and label anchors
 - deterministic port assignment for fan-in/fan-out
 - lane reservation for route bands
-- shared sink/source bundling for bus-like endpoints
+- deterministic coordinate-compressed rectilinear obstacle routing
+- shared sink/source bundling for bus-like endpoints (shared sinks bundle from three incoming edges)
 - telemetry/error/external/back-edge classification
-- perimeter lanes for detected back-edges/cyclic return paths
+- perimeter lanes for detected back-edges/cyclic return paths, with back-edges sharing a target node bundling onto one shared perimeter trunk lane
 - spacing tuned for terminal cell geometry
 
-The layout pass mutates the parsed `Graph` by filling node geometry, group bounds, and edge `RoutePlan`s.
+The layout pass mutates the parsed `Graph` by filling node geometry, group bounds, and edge `RoutePlan`s, including every routed edge label's `label_anchor` — layout is the sole placement authority for routed labels, and the renderer paints them at that anchor.
 
 ## Layout abstraction
 
@@ -60,7 +61,9 @@ Current route planning includes:
 - `RoutePlan.class`
 - `RoutePlan.label_anchor`
 
-Back-edges and cyclic return paths currently route around the graph perimeter. Recent payment-workflow fixtures cover cases such as Stripe webhook and Temporal workflow return edges.
+`RoutePlan.points` is complete renderer-ready geometry: it starts at `source_port`, includes the one-cell outward source stub, follows orthogonal collision-free segments, includes the one-cell outward target tail, and ends at `target_port`.
+
+Each edge first gets one deterministic preferred lane route and uses it only when node-cell validation succeeds. Colliding routes use a graph-level coordinate-compressed grid built from their ports, stubs, one-cell-clear node boundaries, and outer lanes. Search size therefore depends on graph geometry candidates rather than raw terminal coordinate area. Back-edges and cyclic return paths route around the graph perimeter. Recent payment-workflow fixtures cover cases such as Stripe webhook and Temporal workflow return edges.
 
 ## Edge classes
 

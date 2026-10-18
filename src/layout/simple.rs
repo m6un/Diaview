@@ -4,7 +4,10 @@ use crate::model::{
     RoutePlan, RoutePoint,
 };
 use crate::stencil::node_display_cell_width;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque},
+};
 
 const NODE_PADDING_X: f64 = 1.0;
 const NODE_PADDING_Y: f64 = 0.0;
@@ -17,7 +20,7 @@ const GROUP_PADDING_X: f64 = 2.0;
 const GROUP_PADDING_Y: f64 = 1.0;
 const DUMMY_NODE_PREFIX: &str = "__dummy";
 const BARYCENTER_SWEEPS: usize = 4;
-const SHARED_SINK_BUNDLE_MIN_DEGREE: usize = 4;
+const SHARED_SINK_BUNDLE_MIN_DEGREE: usize = 3;
 const SHARED_SOURCE_BUNDLE_MIN_DEGREE: usize = 4;
 const PERIMETER_TELEMETRY_DEGREE: usize = 3;
 
@@ -691,86 +694,185 @@ fn assign_route_plans(graph: &mut Graph) {
         .map(|node| (node.id.clone(), node.clone()))
         .collect();
     let node_indices = node_indices_by_id(&graph.nodes);
-
     let classes: Vec<EdgeClass> = graph
         .edges
         .iter()
         .map(|edge| classify_edge(edge, &node_by_id, &node_indices, &graph.direction))
         .collect();
-
-    let mut source_keys = Vec::with_capacity(graph.edges.len());
-    let mut target_keys = Vec::with_capacity(graph.edges.len());
-    for (edge, class) in graph.edges.iter().zip(classes.iter()) {
-        source_keys.push((
-            edge.source.clone(),
-            source_side(edge, class, &node_by_id, &graph.direction),
-        ));
-        target_keys.push((
-            edge.target.clone(),
-            target_side(edge, class, &node_by_id, &graph.direction),
-        ));
-    }
-
+    let source_keys: Vec<_> = graph
+        .edges
+        .iter()
+        .zip(&classes)
+        .map(|(edge, class)| {
+            (
+                edge.source.clone(),
+                source_side(edge, class, &node_by_id, &graph.direction),
+            )
+        })
+        .collect();
+    let target_keys: Vec<_> = graph
+        .edges
+        .iter()
+        .zip(&classes)
+        .map(|(edge, class)| {
+            (
+                edge.target.clone(),
+                target_side(edge, class, &node_by_id, &graph.direction),
+            )
+        })
+        .collect();
     let source_offsets = port_offsets(&source_keys);
     let target_offsets = port_offsets(&target_keys);
-    let bundles = detect_bundles(graph, &node_by_id);
+    let bundles = detect_bundles(graph);
     let perimeter = graph_perimeter(&graph.nodes);
     let telemetry_degrees = telemetry_degrees(graph, &classes);
     let mut lane_allocator = LaneAllocator::default();
+    let mut specs = Vec::with_capacity(graph.edges.len());
+    let backedge_target_degrees: HashMap<String, usize> = graph
+        .edges
+        .iter()
+        .zip(&classes)
+        .filter(|(_, class)| **class == EdgeClass::BackEdge)
+        .fold(HashMap::new(), |mut counts, (edge, _)| {
+            *counts.entry(edge.target.clone()).or_insert(0) += 1;
+            counts
+        });
 
-    for (idx, edge) in graph.edges.iter_mut().enumerate() {
+    for (idx, edge) in graph.edges.iter().enumerate() {
         let (Some(src), Some(tgt)) = (node_by_id.get(&edge.source), node_by_id.get(&edge.target))
         else {
-            edge.route = None;
+            specs.push(None);
             continue;
         };
-
-        let source_side = source_keys[idx].1.clone();
-        let target_side = target_keys[idx].1.clone();
-        let source_port = make_port(src, source_side, source_offsets[idx]);
-        let target_port = make_port(tgt, target_side, target_offsets[idx]);
+        let source_port = make_port(src, source_keys[idx].1.clone(), source_offsets[idx]);
+        let target_port = make_port(tgt, target_keys[idx].1.clone(), target_offsets[idx]);
         let class = &classes[idx];
         let bundle = bundle_for_edge(edge, &bundles);
-        let (lane_id, points) = if *class == EdgeClass::BackEdge {
-            let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
-            (
-                Some(lane.id),
-                perimeter_points(&graph.direction, &source_port, &target_port, lane.coord),
-            )
+        let (lane_id, preferred_lane, required_lane) = if *class == EdgeClass::BackEdge {
+            let lane = if backedge_target_degrees
+                .get(&edge.target)
+                .copied()
+                .unwrap_or(0)
+                >= 3
+            {
+                lane_allocator.reserve_backedge_bus(tgt, &graph.direction)
+            } else {
+                lane_allocator.reserve_perimeter(&graph.direction, &perimeter)
+            };
+            let route_lane = perimeter_route_lane(&graph.direction, lane.coord);
+            (Some(lane.id), route_lane, Some(route_lane))
         } else if let Some(bundle) = bundle {
-            let lane_id = lane_allocator.bundle_lane(bundle.key.clone());
-            let trunk_coord =
-                bundle_trunk_coordinate(&graph.direction, bundle.kind, &source_port, &target_port);
+            let route_lane =
+                bundle_route_lane(&graph.direction, bundle.kind, &source_port, &target_port);
             (
-                Some(lane_id),
-                orthogonal_points(&graph.direction, &source_port, &target_port, trunk_coord),
+                Some(lane_allocator.bundle_lane(bundle.key)),
+                route_lane,
+                Some(route_lane),
             )
         } else if *class == EdgeClass::Telemetry
             && should_route_telemetry_on_perimeter(edge, &telemetry_degrees)
         {
             let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
-            (
-                Some(lane.id),
-                perimeter_points(&graph.direction, &source_port, &target_port, lane.coord),
-            )
+            let route_lane = perimeter_route_lane(&graph.direction, lane.coord);
+            (Some(lane.id), route_lane, Some(route_lane))
         } else {
             let lane = lane_allocator.reserve_between(&graph.direction, &source_port, &target_port);
             (
                 Some(lane.id),
-                orthogonal_points(&graph.direction, &source_port, &target_port, lane.coord),
+                local_route_lane(&graph.direction, lane.coord),
+                None,
             )
         };
-        let label_anchor = route_label_anchor(edge.label.as_deref(), &points);
-
-        edge.route = Some(RoutePlan {
-            points,
+        specs.push(Some(RouteSpec {
+            preferred: lane_route_points(&source_port, &target_port, preferred_lane),
             source_port,
             target_port,
             lane_id,
+            required_lane,
+        }));
+    }
+
+    let grid = RoutingGrid::new(&specs, &graph.nodes, &perimeter);
+    let mut route_occupancy = RouteOccupancy::default();
+    for (idx, edge) in graph.edges.iter_mut().enumerate() {
+        let Some(spec) = &specs[idx] else {
+            edge.route = None;
+            continue;
+        };
+        let identity = RouteIdentity::new(edge, spec);
+        let Some(points) = route_points(
+            spec.preferred.clone(),
+            &spec.source_port,
+            &spec.target_port,
+            &graph.nodes,
+            &grid,
+            spec.required_lane,
+            &identity,
+            &route_occupancy,
+        ) else {
+            edge.route = None;
+            continue;
+        };
+        route_occupancy.add(identity, &points);
+        edge.route = Some(RoutePlan {
+            points,
+            source_port: spec.source_port.clone(),
+            target_port: spec.target_port.clone(),
+            lane_id: spec.lane_id,
             class: classes[idx].clone(),
-            label_anchor,
+            label_anchor: None,
         });
     }
+
+    // Post-pass: one deterministic sequential sweep. Reroute each edge
+    // against the occupancy of all other routed edges, keeping only strictly
+    // cheaper candidates. Routes already conflict-free are skipped.
+    for idx in 0..graph.edges.len() {
+        let Some(spec) = &specs[idx] else { continue };
+        let Some(current_points) = graph.edges[idx]
+            .route
+            .as_ref()
+            .map(|route| route.points.clone())
+        else {
+            continue;
+        };
+        let identity = RouteIdentity::new(&graph.edges[idx], spec);
+        let others = occupancy_excluding(graph, &specs, idx);
+        let current_cost = route_conflict_cost(&current_points, &identity, &others);
+        if current_cost == 0 {
+            continue;
+        }
+        let Some(candidate) = route_points(
+            spec.preferred.clone(),
+            &spec.source_port,
+            &spec.target_port,
+            &graph.nodes,
+            &grid,
+            spec.required_lane,
+            &identity,
+            &others,
+        ) else {
+            continue;
+        };
+        if route_conflict_cost(&candidate, &identity, &others) < current_cost {
+            graph.edges[idx].route.as_mut().unwrap().points = candidate;
+        }
+    }
+    assign_route_label_anchors(graph);
+}
+
+fn occupancy_excluding(graph: &Graph, specs: &[Option<RouteSpec>], skip: usize) -> RouteOccupancy {
+    let mut occupancy = RouteOccupancy::default();
+    for (idx, edge) in graph.edges.iter().enumerate() {
+        if idx == skip {
+            continue;
+        }
+        let (Some(spec), Some(route)) = (&specs[idx], &edge.route) else {
+            continue;
+        };
+        occupancy.add(RouteIdentity::new(edge, spec), &route.points);
+    }
+    occupancy
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -790,6 +892,7 @@ struct LaneAllocator {
     next_id: usize,
     band_counts: HashMap<BandKey, usize>,
     perimeter_counts: HashMap<Direction, usize>,
+    perimeter_by_target: HashMap<String, ReservedLane>,
     bundle_ids: HashMap<(String, BundleKind), usize>,
 }
 
@@ -797,6 +900,58 @@ struct LaneAllocator {
 struct ReservedLane {
     id: usize,
     coord: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RouteLane {
+    Vertical(f64),
+    Horizontal(f64),
+}
+
+struct RouteSpec {
+    preferred: Vec<RoutePoint>,
+    source_port: Port,
+    target_port: Port,
+    lane_id: Option<usize>,
+    required_lane: Option<RouteLane>,
+}
+
+struct RoutingGrid {
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    clear: Vec<bool>,
+    right_clear: Vec<bool>,
+    down_clear: Vec<bool>,
+}
+
+#[derive(Clone)]
+struct RouteIdentity {
+    source: String,
+    target: String,
+    lane_id: Option<usize>,
+    source_cells: [(i64, i64); 2],
+    target_cells: [(i64, i64); 2],
+}
+
+#[derive(Default)]
+struct RouteOccupancy {
+    routes: Vec<RouteIdentity>,
+    horizontal: BTreeMap<i64, Vec<IndexedSegment>>,
+    vertical: BTreeMap<i64, Vec<IndexedSegment>>,
+}
+
+#[derive(Clone, Copy)]
+struct IndexedSegment {
+    route: usize,
+    segment: RasterSegment,
+}
+
+#[derive(Clone, Copy)]
+struct RasterSegment {
+    horizontal: bool,
+    fixed: i64,
+    start: i64,
+    end: i64,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -872,6 +1027,28 @@ impl LaneAllocator {
         ReservedLane { id, coord }
     }
 
+    /// One shared lane per repeated-feedback BackEdge target node (>= 3
+    /// same-target back-edges): a local bus just outside the target's
+    /// return side (TD: right of target, LR: below target). Distinct
+    /// targets still get distinct lanes.
+    fn reserve_backedge_bus(&mut self, target: &Node, direction: &Direction) -> ReservedLane {
+        if let Some(lane) = self.perimeter_by_target.get(&target.id) {
+            return *lane;
+        }
+        let coord = match direction {
+            Direction::TopDown => {
+                target.x.unwrap_or(0.0) + target.width.unwrap_or(MIN_NODE_WIDTH) + 1.0
+            }
+            Direction::LeftRight => {
+                target.y.unwrap_or(0.0) + target.height.unwrap_or(MIN_NODE_HEIGHT) + 1.0
+            }
+        };
+        let id = self.alloc_id();
+        let lane = ReservedLane { id, coord };
+        self.perimeter_by_target.insert(target.id.clone(), lane);
+        lane
+    }
+
     fn bundle_lane(&mut self, key: (String, BundleKind)) -> usize {
         if let Some(id) = self.bundle_ids.get(&key) {
             return *id;
@@ -901,10 +1078,7 @@ fn lane_offset(rank: usize) -> f64 {
     }
 }
 
-fn detect_bundles(
-    graph: &Graph,
-    nodes: &HashMap<String, Node>,
-) -> HashMap<(String, BundleKind), BundleAssignment> {
+fn detect_bundles(graph: &Graph) -> HashMap<(String, BundleKind), BundleAssignment> {
     let mut incoming: HashMap<String, usize> = HashMap::new();
     let mut outgoing: HashMap<String, usize> = HashMap::new();
     for edge in &graph.edges {
@@ -924,14 +1098,6 @@ fn detect_bundles(
 
         if outgoing_count >= SHARED_SOURCE_BUNDLE_MIN_DEGREE && semantic_bus {
             insert_bundle(&mut bundles, node.id.clone(), BundleKind::SharedSource);
-        }
-    }
-
-    for (id, incoming_count) in incoming {
-        if incoming_count >= SHARED_SINK_BUNDLE_MIN_DEGREE
-            && nodes.get(&id).is_some_and(is_semantic_bus_endpoint)
-        {
-            insert_bundle(&mut bundles, id, BundleKind::SharedSink);
         }
     }
 
@@ -961,23 +1127,41 @@ fn bundle_for_edge(
         })
 }
 
-fn is_semantic_bus_endpoint(node: &Node) -> bool {
-    let text = format!("{} {}", node.id, node.label).to_lowercase();
-    contains_bus_term(&text)
+fn local_route_lane(direction: &Direction, coordinate: f64) -> RouteLane {
+    match direction {
+        Direction::TopDown => RouteLane::Horizontal(coordinate),
+        Direction::LeftRight => RouteLane::Vertical(coordinate),
+    }
 }
 
-fn bundle_trunk_coordinate(
+fn perimeter_route_lane(direction: &Direction, coordinate: f64) -> RouteLane {
+    match direction {
+        Direction::TopDown => RouteLane::Vertical(coordinate),
+        Direction::LeftRight => RouteLane::Horizontal(coordinate),
+    }
+}
+
+fn bundle_route_lane(
     direction: &Direction,
     kind: BundleKind,
     source_port: &Port,
     target_port: &Port,
-) -> f64 {
+) -> RouteLane {
     match (direction, kind) {
-        (Direction::TopDown, BundleKind::SharedSink) => target_port.y - 2.0,
-        (Direction::TopDown, BundleKind::SharedSource) => source_port.y + 2.0,
-        (Direction::LeftRight, BundleKind::SharedSink) => target_port.x - 2.0,
-        (Direction::LeftRight, BundleKind::SharedSource) => source_port.x + 2.0,
+        (Direction::TopDown, BundleKind::SharedSink) => RouteLane::Horizontal(target_port.y - 2.0),
+        (Direction::TopDown, BundleKind::SharedSource) => {
+            RouteLane::Horizontal(source_port.y + 2.0)
+        }
+        (Direction::LeftRight, BundleKind::SharedSink) => RouteLane::Vertical(target_port.x - 2.0),
+        (Direction::LeftRight, BundleKind::SharedSource) => {
+            RouteLane::Vertical(source_port.x + 2.0)
+        }
     }
+}
+
+fn is_semantic_bus_endpoint(node: &Node) -> bool {
+    let text = format!("{} {}", node.id, node.label).to_lowercase();
+    contains_bus_term(&text)
 }
 
 fn classify_edge(
@@ -1185,88 +1369,824 @@ fn make_port(node: &Node, side: PortSide, offset: f64) -> Port {
     Port { x: px, y: py, side }
 }
 
-fn orthogonal_points(
-    direction: &Direction,
-    source_port: &Port,
-    target_port: &Port,
-    lane_coord: f64,
-) -> Vec<RoutePoint> {
-    let mut points = vec![RoutePoint {
-        x: source_port.x,
-        y: source_port.y,
-    }];
-
-    match direction {
-        Direction::TopDown => {
-            points.push(RoutePoint {
-                x: source_port.x,
-                y: lane_coord,
-            });
-            points.push(RoutePoint {
-                x: target_port.x,
-                y: lane_coord,
-            });
-        }
-        Direction::LeftRight => {
-            points.push(RoutePoint {
-                x: lane_coord,
-                y: source_port.y,
-            });
-            points.push(RoutePoint {
-                x: lane_coord,
-                y: target_port.y,
-            });
-        }
+fn lane_route_points(source_port: &Port, target_port: &Port, lane: RouteLane) -> Vec<RoutePoint> {
+    let source_stub = outward_point(source_port);
+    let target_tail = outward_point(target_port);
+    let mut points = vec![
+        RoutePoint {
+            x: source_port.x,
+            y: source_port.y,
+        },
+        source_stub.clone(),
+    ];
+    match lane {
+        RouteLane::Vertical(x) => points.extend([
+            RoutePoint {
+                x,
+                y: source_stub.y,
+            },
+            RoutePoint {
+                x,
+                y: target_tail.y,
+            },
+        ]),
+        RouteLane::Horizontal(y) => points.extend([
+            RoutePoint {
+                x: source_stub.x,
+                y,
+            },
+            RoutePoint {
+                x: target_tail.x,
+                y,
+            },
+        ]),
     }
-
-    points.push(RoutePoint {
-        x: target_port.x,
-        y: target_port.y,
-    });
-    points.dedup_by(|a, b| (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01);
+    points.extend([
+        target_tail,
+        RoutePoint {
+            x: target_port.x,
+            y: target_port.y,
+        },
+    ]);
+    points.dedup_by(same_point);
     points
 }
 
-fn perimeter_points(
-    direction: &Direction,
+impl RouteIdentity {
+    fn new(edge: &Edge, spec: &RouteSpec) -> Self {
+        Self {
+            source: edge.source.clone(),
+            target: edge.target.clone(),
+            lane_id: spec.lane_id,
+            source_cells: [
+                raster_point(&spec.preferred[0]),
+                raster_point(&outward_point(&spec.source_port)),
+            ],
+            target_cells: [
+                raster_point(&outward_point(&spec.target_port)),
+                raster_point(spec.preferred.last().unwrap()),
+            ],
+        }
+    }
+}
+
+impl RouteOccupancy {
+    fn add(&mut self, identity: RouteIdentity, points: &[RoutePoint]) {
+        let route = self.routes.len();
+        self.routes.push(identity);
+        for segment in points.windows(2).map(raster_segment) {
+            let indexed = IndexedSegment { route, segment };
+            if segment.horizontal {
+                self.horizontal
+                    .entry(segment.fixed)
+                    .or_default()
+                    .push(indexed);
+            } else {
+                self.vertical
+                    .entry(segment.fixed)
+                    .or_default()
+                    .push(indexed);
+            }
+        }
+    }
+}
+
+fn route_conflict_cost(
+    points: &[RoutePoint],
+    identity: &RouteIdentity,
+    occupied_routes: &RouteOccupancy,
+) -> usize {
+    points
+        .windows(2)
+        .map(raster_segment)
+        .map(|segment| segment_conflict_cost_for(&segment, identity, occupied_routes))
+        .sum()
+}
+
+fn segment_conflict_cost(
+    from: &RoutePoint,
+    to: &RoutePoint,
+    identity: &RouteIdentity,
+    occupied_routes: &RouteOccupancy,
+) -> usize {
+    segment_conflict_cost_for(
+        &raster_segment(&[from.clone(), to.clone()]),
+        identity,
+        occupied_routes,
+    )
+}
+
+fn segment_conflict_cost_for(
+    candidate: &RasterSegment,
+    identity: &RouteIdentity,
+    occupied: &RouteOccupancy,
+) -> usize {
+    let mut cost = 0;
+    if candidate.horizontal {
+        if let Some(collinear) = occupied.horizontal.get(&candidate.fixed) {
+            cost += collinear
+                .iter()
+                .map(|prior| indexed_conflict(candidate, identity, occupied, prior))
+                .sum::<usize>();
+        }
+        for perpendicular in occupied.vertical.range(candidate.start..=candidate.end) {
+            cost += perpendicular
+                .1
+                .iter()
+                .filter(|prior| {
+                    prior.segment.start <= candidate.fixed && prior.segment.end >= candidate.fixed
+                })
+                .map(|prior| indexed_conflict(candidate, identity, occupied, prior))
+                .sum::<usize>();
+        }
+    } else {
+        if let Some(collinear) = occupied.vertical.get(&candidate.fixed) {
+            cost += collinear
+                .iter()
+                .map(|prior| indexed_conflict(candidate, identity, occupied, prior))
+                .sum::<usize>();
+        }
+        for perpendicular in occupied.horizontal.range(candidate.start..=candidate.end) {
+            cost += perpendicular
+                .1
+                .iter()
+                .filter(|prior| {
+                    prior.segment.start <= candidate.fixed && prior.segment.end >= candidate.fixed
+                })
+                .map(|prior| indexed_conflict(candidate, identity, occupied, prior))
+                .sum::<usize>();
+        }
+    }
+    cost
+}
+
+fn indexed_conflict(
+    candidate: &RasterSegment,
+    identity: &RouteIdentity,
+    occupied: &RouteOccupancy,
+    prior: &IndexedSegment,
+) -> usize {
+    let prior_identity = &occupied.routes[prior.route];
+    if intentional_lane_sharing(identity, prior_identity) {
+        return 0;
+    }
+    let cost = segment_intersection_cells(candidate, &prior.segment);
+    let exemptions = identity
+        .source_cells
+        .into_iter()
+        .chain(identity.target_cells)
+        .filter(|cell| {
+            cell_is_shared_endpoint_exempt(identity, prior_identity, *cell)
+                && candidate.contains(*cell)
+                && prior.segment.contains(*cell)
+        })
+        .collect::<HashSet<_>>()
+        .len();
+    cost.saturating_sub(exemptions)
+}
+
+fn intentional_lane_sharing(a: &RouteIdentity, b: &RouteIdentity) -> bool {
+    a.lane_id.is_some() && a.lane_id == b.lane_id && (a.source == b.source || a.target == b.target)
+}
+
+fn cell_is_shared_endpoint_exempt(a: &RouteIdentity, b: &RouteIdentity, cell: (i64, i64)) -> bool {
+    [(&a.source, &a.source_cells), (&a.target, &a.target_cells)]
+        .into_iter()
+        .any(|(a_id, a_cells)| {
+            [(&b.source, &b.source_cells), (&b.target, &b.target_cells)]
+                .into_iter()
+                .any(|(b_id, b_cells)| {
+                    a_id == b_id && a_cells.contains(&cell) && b_cells.contains(&cell)
+                })
+        })
+}
+
+fn raster_segment(points: &[RoutePoint]) -> RasterSegment {
+    let a = raster_point(&points[0]);
+    let b = raster_point(&points[1]);
+    if a.1 == b.1 {
+        RasterSegment {
+            horizontal: true,
+            fixed: a.1,
+            start: a.0.min(b.0),
+            end: a.0.max(b.0),
+        }
+    } else {
+        RasterSegment {
+            horizontal: false,
+            fixed: a.0,
+            start: a.1.min(b.1),
+            end: a.1.max(b.1),
+        }
+    }
+}
+
+fn raster_point(point: &RoutePoint) -> (i64, i64) {
+    (point.x.round() as i64, point.y.round() as i64)
+}
+
+impl RasterSegment {
+    fn contains(&self, (x, y): (i64, i64)) -> bool {
+        if self.horizontal {
+            y == self.fixed && x >= self.start && x <= self.end
+        } else {
+            x == self.fixed && y >= self.start && y <= self.end
+        }
+    }
+}
+
+fn segment_intersection_cells(a: &RasterSegment, b: &RasterSegment) -> usize {
+    if a.horizontal == b.horizontal {
+        if a.fixed != b.fixed {
+            return 0;
+        }
+        let overlap = a.end.min(b.end) - a.start.max(b.start);
+        return if overlap >= 0 {
+            overlap as usize + 1
+        } else {
+            0
+        };
+    }
+    let (horizontal, vertical) = if a.horizontal { (a, b) } else { (b, a) };
+    usize::from(
+        vertical.fixed >= horizontal.start
+            && vertical.fixed <= horizontal.end
+            && horizontal.fixed >= vertical.start
+            && horizontal.fixed <= vertical.end,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_points(
+    preferred: Vec<RoutePoint>,
     source_port: &Port,
     target_port: &Port,
-    perimeter_coord: f64,
-) -> Vec<RoutePoint> {
+    nodes: &[Node],
+    grid: &RoutingGrid,
+    required_lane: Option<RouteLane>,
+    identity: &RouteIdentity,
+    occupied_routes: &RouteOccupancy,
+) -> Option<Vec<RoutePoint>> {
+    if route_is_valid(&preferred, source_port, target_port, nodes)
+        && route_conflict_cost(&preferred, identity, occupied_routes) == 0
+    {
+        return Some(preferred);
+    }
+    obstacle_avoiding_points(
+        source_port,
+        target_port,
+        nodes,
+        grid,
+        required_lane,
+        identity,
+        occupied_routes,
+    )
+}
+
+fn obstacle_avoiding_points(
+    source_port: &Port,
+    target_port: &Port,
+    nodes: &[Node],
+    grid: &RoutingGrid,
+    required_lane: Option<RouteLane>,
+    identity: &RouteIdentity,
+    occupied_routes: &RouteOccupancy,
+) -> Option<Vec<RoutePoint>> {
+    let source_stub = outward_point(source_port);
+    let target_tail = outward_point(target_port);
+    let sx = coordinate_index(&grid.xs, source_stub.x);
+    let sy = coordinate_index(&grid.ys, source_stub.y);
+    let tx = coordinate_index(&grid.xs, target_tail.x);
+    let ty = coordinate_index(&grid.ys, target_tail.y);
+    let start = sx.zip(sy).map(|(x, y)| y * grid.xs.len() + x)?;
+    let goal = tx.zip(ty).map(|(x, y)| y * grid.xs.len() + x)?;
+    if !grid.clear[start] || !grid.clear[goal] {
+        return None;
+    }
+
+    let core = compressed_grid_path(grid, start, goal, required_lane, identity, occupied_routes)?;
     let mut points = vec![RoutePoint {
         x: source_port.x,
         y: source_port.y,
     }];
-
-    match direction {
-        Direction::TopDown => {
-            points.push(RoutePoint {
-                x: perimeter_coord,
-                y: source_port.y,
-            });
-            points.push(RoutePoint {
-                x: perimeter_coord,
-                y: target_port.y,
-            });
-        }
-        Direction::LeftRight => {
-            points.push(RoutePoint {
-                x: source_port.x,
-                y: perimeter_coord,
-            });
-            points.push(RoutePoint {
-                x: target_port.x,
-                y: perimeter_coord,
-            });
-        }
-    }
-
+    points.extend(core);
     points.push(RoutePoint {
         x: target_port.x,
         y: target_port.y,
     });
-    points.dedup_by(|a, b| (a.x - b.x).abs() < 0.01 && (a.y - b.y).abs() < 0.01);
+    points.dedup_by(same_point);
+
+    route_is_valid(&points, source_port, target_port, nodes).then_some(points)
+}
+
+impl RoutingGrid {
+    fn new(specs: &[Option<RouteSpec>], nodes: &[Node], perimeter: &GraphPerimeter) -> Self {
+        let mut xs = vec![perimeter.max_x + NODE_GAP_WITHIN_LAYER];
+        let mut ys = vec![perimeter.max_y + LAYER_GAP];
+        for spec in specs.iter().flatten() {
+            let source_stub = outward_point(&spec.source_port);
+            let target_tail = outward_point(&spec.target_port);
+            xs.extend([
+                spec.source_port.x,
+                spec.target_port.x,
+                source_stub.x,
+                target_tail.x,
+            ]);
+            ys.extend([
+                spec.source_port.y,
+                spec.target_port.y,
+                source_stub.y,
+                target_tail.y,
+            ]);
+            match spec.required_lane {
+                Some(RouteLane::Vertical(x)) => xs.push(x),
+                Some(RouteLane::Horizontal(y)) => ys.push(y),
+                None => {}
+            }
+        }
+        for node in nodes.iter().filter(|node| !is_dummy_node(node)) {
+            if let Some((x, y, width, height)) = node_cell_rect(node) {
+                if x > 0 {
+                    xs.push((x - 1) as f64);
+                }
+                if y > 0 {
+                    ys.push((y - 1) as f64);
+                }
+                xs.push((x + width) as f64);
+                ys.push((y + height) as f64);
+            }
+        }
+        sort_coordinates(&mut xs);
+        sort_coordinates(&mut ys);
+
+        let width = xs.len();
+        let clear: Vec<bool> = ys
+            .iter()
+            .flat_map(|&y| {
+                xs.iter()
+                    .map(move |&x| !point_hits_real_node(&RoutePoint { x, y }, nodes))
+            })
+            .collect();
+        let mut right_clear = vec![false; clear.len()];
+        let mut down_clear = vec![false; clear.len()];
+        for cell in 0..clear.len() {
+            if !clear[cell] {
+                continue;
+            }
+            let point = grid_point(cell, &xs, &ys);
+            if cell % width + 1 < width && clear[cell + 1] {
+                right_clear[cell] =
+                    !segment_hits_any_real_node(&point, &grid_point(cell + 1, &xs, &ys), nodes);
+            }
+            if cell + width < clear.len() && clear[cell + width] {
+                down_clear[cell] =
+                    !segment_hits_any_real_node(&point, &grid_point(cell + width, &xs, &ys), nodes);
+            }
+        }
+        Self {
+            xs,
+            ys,
+            clear,
+            right_clear,
+            down_clear,
+        }
+    }
+
+    fn edge_is_clear(&self, from: usize, to: usize) -> bool {
+        if to == from + 1 {
+            self.right_clear[from]
+        } else if from == to + 1 {
+            self.right_clear[to]
+        } else if to > from {
+            self.down_clear[from]
+        } else {
+            self.down_clear[to]
+        }
+    }
+}
+
+fn sort_coordinates(coordinates: &mut Vec<f64>) {
+    coordinates.retain(|value| value.is_finite() && *value >= 0.0);
+    coordinates.sort_by(|a, b| a.total_cmp(b));
+    coordinates.dedup_by(|a, b| (*a - *b).abs() < 0.01);
+}
+
+fn compressed_grid_path(
+    grid: &RoutingGrid,
+    start: usize,
+    goal: usize,
+    required_lane: Option<RouteLane>,
+    identity: &RouteIdentity,
+    occupied_routes: &RouteOccupancy,
+) -> Option<Vec<RoutePoint>> {
+    const DIRECTIONS: usize = 5;
+    const PERIMETER_STATES: usize = 2;
+    const STATE_COUNT: usize = DIRECTIONS * PERIMETER_STATES;
+
+    let width = grid.xs.len();
+    let height = grid.ys.len();
+    let start_uses_perimeter = false;
+    let start_state = state_index(0, start_uses_perimeter);
+    let mut distances = vec![[None; STATE_COUNT]; grid.clear.len()];
+    let mut previous = vec![[None; STATE_COUNT]; grid.clear.len()];
+    let mut right_conflicts = vec![None; grid.clear.len()];
+    let mut down_conflicts = vec![None; grid.clear.len()];
+    let mut queue = BinaryHeap::new();
+    distances[start][start_state] = Some((0_usize, 0_usize, 0_i64));
+    queue.push(Reverse((
+        0_usize,
+        0_usize,
+        0_i64,
+        start,
+        0_u8,
+        start_uses_perimeter,
+    )));
+
+    while let Some(Reverse((conflicts, bends, length, cell, incoming, used_perimeter))) =
+        queue.pop()
+    {
+        let state = state_index(incoming, used_perimeter);
+        if distances[cell][state] != Some((conflicts, bends, length)) {
+            continue;
+        }
+        if cell == goal && (required_lane.is_none() || used_perimeter) {
+            return Some(compress_route_points(reconstruct_grid_path(
+                cell,
+                incoming,
+                used_perimeter,
+                &previous,
+                &grid.xs,
+                &grid.ys,
+            )));
+        }
+
+        for next in adjacent_grid_cells(cell, width, height)
+            .into_iter()
+            .flatten()
+        {
+            if !grid.clear[next] || !grid.edge_is_clear(cell, next) {
+                continue;
+            }
+            let from = grid_point(cell, &grid.xs, &grid.ys);
+            let to = grid_point(next, &grid.xs, &grid.ys);
+            let next_direction = step_direction(&from, &to);
+            if directions_are_opposite(incoming, next_direction) {
+                continue;
+            }
+            let conflict_cache = if next.abs_diff(cell) == 1 {
+                &mut right_conflicts[cell.min(next)]
+            } else {
+                &mut down_conflicts[cell.min(next)]
+            };
+            let segment_conflicts = *conflict_cache.get_or_insert_with(|| {
+                segment_conflict_cost(&from, &to, identity, occupied_routes)
+            });
+            let next_conflicts = conflicts + segment_conflicts;
+            let next_bends = bends
+                + usize::from(
+                    incoming != 0 && direction_axis(incoming) != direction_axis(next_direction),
+                );
+            let next_length = length + route_distance(&from, &to);
+            let next_used_perimeter =
+                used_perimeter || segment_uses_required_lane(&from, &to, required_lane);
+            let next_state = state_index(next_direction, next_used_perimeter);
+            let next_cost = (next_conflicts, next_bends, next_length);
+            if distances[next][next_state].is_some_and(|cost| cost <= next_cost) {
+                continue;
+            }
+            distances[next][next_state] = Some(next_cost);
+            previous[next][next_state] = Some((cell, incoming, used_perimeter));
+            queue.push(Reverse((
+                next_conflicts,
+                next_bends,
+                next_length,
+                next,
+                next_direction,
+                next_used_perimeter,
+            )));
+        }
+    }
+
+    None
+}
+
+fn state_index(direction: u8, used_perimeter: bool) -> usize {
+    direction as usize * 2 + usize::from(used_perimeter)
+}
+
+fn step_direction(from: &RoutePoint, to: &RoutePoint) -> u8 {
+    if to.x > from.x {
+        1
+    } else if to.y > from.y {
+        2
+    } else if to.x < from.x {
+        3
+    } else {
+        4
+    }
+}
+
+fn direction_axis(direction: u8) -> u8 {
+    match direction {
+        1 | 3 => 1,
+        2 | 4 => 2,
+        _ => 0,
+    }
+}
+
+fn directions_are_opposite(a: u8, b: u8) -> bool {
+    matches!((a, b), (1, 3) | (3, 1) | (2, 4) | (4, 2))
+}
+
+fn adjacent_grid_cells(cell: usize, width: usize, height: usize) -> [Option<usize>; 4] {
+    let x = cell % width;
+    let y = cell / width;
+    [
+        (x + 1 < width).then_some(cell + 1),
+        (y + 1 < height).then_some(cell + width),
+        (x > 0).then(|| cell - 1),
+        (y > 0).then(|| cell - width),
+    ]
+}
+
+fn grid_point(cell: usize, xs: &[f64], ys: &[f64]) -> RoutePoint {
+    RoutePoint {
+        x: xs[cell % xs.len()],
+        y: ys[cell / xs.len()],
+    }
+}
+
+fn segment_uses_required_lane(
+    from: &RoutePoint,
+    to: &RoutePoint,
+    required_lane: Option<RouteLane>,
+) -> bool {
+    required_lane.is_some_and(|lane| match lane {
+        RouteLane::Vertical(x) => same(from.x, x) && same(to.x, x),
+        RouteLane::Horizontal(y) => same(from.y, y) && same(to.y, y),
+    })
+}
+
+fn route_distance(a: &RoutePoint, b: &RoutePoint) -> i64 {
+    (((a.x - b.x).abs() + (a.y - b.y).abs()) * 1_000.0).round() as i64
+}
+
+type PreviousStates = [Option<(usize, u8, bool)>; 10];
+
+fn reconstruct_grid_path(
+    mut cell: usize,
+    mut direction: u8,
+    mut used_perimeter: bool,
+    previous: &[PreviousStates],
+    xs: &[f64],
+    ys: &[f64],
+) -> Vec<RoutePoint> {
+    let mut points = vec![grid_point(cell, xs, ys)];
+    while let Some((prior_cell, prior_direction, prior_used_perimeter)) =
+        previous[cell][state_index(direction, used_perimeter)]
+    {
+        cell = prior_cell;
+        direction = prior_direction;
+        used_perimeter = prior_used_perimeter;
+        points.push(grid_point(cell, xs, ys));
+    }
+    points.reverse();
     points
+}
+
+fn compress_route_points(points: Vec<RoutePoint>) -> Vec<RoutePoint> {
+    if points.len() < 3 {
+        return points;
+    }
+    let mut compressed = vec![points[0].clone()];
+    for window in points.windows(3) {
+        let same_vertical = same(window[0].x, window[1].x) && same(window[1].x, window[2].x);
+        let same_horizontal = same(window[0].y, window[1].y) && same(window[1].y, window[2].y);
+        if !same_vertical && !same_horizontal {
+            compressed.push(window[1].clone());
+        }
+    }
+    compressed.push(points.last().unwrap().clone());
+    compressed
+}
+
+fn outward_point(port: &Port) -> RoutePoint {
+    let (dx, dy) = match port.side {
+        PortSide::Top => (0.0, -1.0),
+        PortSide::Right => (1.0, 0.0),
+        PortSide::Bottom => (0.0, 1.0),
+        PortSide::Left => (-1.0, 0.0),
+    };
+    RoutePoint {
+        x: port.x + dx,
+        y: port.y + dy,
+    }
+}
+
+fn coordinate_index(coordinates: &[f64], value: f64) -> Option<usize> {
+    coordinates
+        .iter()
+        .position(|candidate| same(*candidate, value))
+}
+
+fn route_is_valid(points: &[RoutePoint], source: &Port, target: &Port, nodes: &[Node]) -> bool {
+    let source_stub = outward_point(source);
+    let target_tail = outward_point(target);
+    points.first().is_some_and(|point| same_port(point, source))
+        && points
+            .get(1)
+            .is_some_and(|point| same_point_ref(point, &source_stub))
+        && points.last().is_some_and(|point| same_port(point, target))
+        && points
+            .get(points.len().saturating_sub(2))
+            .is_some_and(|point| same_point_ref(point, &target_tail))
+        && points.windows(2).all(|segment| {
+            (same(segment[0].x, segment[1].x) || same(segment[0].y, segment[1].y))
+                && !segment_hits_any_real_node(&segment[0], &segment[1], nodes)
+        })
+}
+
+fn same_port(point: &RoutePoint, port: &Port) -> bool {
+    same(point.x, port.x) && same(point.y, port.y)
+}
+
+fn same_point(a: &mut RoutePoint, b: &mut RoutePoint) -> bool {
+    same_point_ref(a, b)
+}
+
+fn same_point_ref(a: &RoutePoint, b: &RoutePoint) -> bool {
+    same(a.x, b.x) && same(a.y, b.y)
+}
+
+fn same(a: f64, b: f64) -> bool {
+    (a - b).abs() < 0.01
+}
+
+fn point_hits_real_node(point: &RoutePoint, nodes: &[Node]) -> bool {
+    nodes
+        .iter()
+        .filter(|node| !is_dummy_node(node))
+        .any(|node| segment_hits_node_cells(point, point, node))
+}
+
+fn segment_hits_any_real_node(a: &RoutePoint, b: &RoutePoint, nodes: &[Node]) -> bool {
+    nodes
+        .iter()
+        .filter(|node| !is_dummy_node(node))
+        .any(|node| segment_hits_node_cells(a, b, node))
+}
+
+fn segment_hits_node_cells(a: &RoutePoint, b: &RoutePoint, node: &Node) -> bool {
+    let Some((x, y, width, height)) = node_cell_rect(node) else {
+        return false;
+    };
+    if same(a.x, b.x) {
+        let px = a.x.round() as i64;
+        let y1 = a.y.min(b.y).round() as i64;
+        let y2 = a.y.max(b.y).round() as i64;
+        px >= x && px < x + width && y1 < y + height && y2 >= y
+    } else if same(a.y, b.y) {
+        let py = a.y.round() as i64;
+        let x1 = a.x.min(b.x).round() as i64;
+        let x2 = a.x.max(b.x).round() as i64;
+        py >= y && py < y + height && x1 < x + width && x2 >= x
+    } else {
+        true
+    }
+}
+
+fn node_cell_rect(node: &Node) -> Option<(i64, i64, i64, i64)> {
+    let (Some(x), Some(y), Some(width), Some(height)) = (node.x, node.y, node.width, node.height)
+    else {
+        return None;
+    };
+    if [x, y, width, height]
+        .iter()
+        .all(|value| value.is_finite() && *value >= 0.0)
+    {
+        Some((x as i64, y as i64, width as i64, height as i64))
+    } else {
+        None
+    }
+}
+
+fn assign_route_label_anchors(graph: &mut Graph) {
+    let route_segments: Vec<Vec<RasterSegment>> = graph
+        .edges
+        .iter()
+        .map(|edge| {
+            edge.route
+                .as_ref()
+                .map(|route| route.points.windows(2).map(raster_segment).collect())
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut occupied_labels = HashSet::new();
+    // Laid-out horizontal extent from nodes and routed points: labels on
+    // vertical segments prefer the inward side so they never push bounds
+    // outward when the opposite side is clear.
+    let (min_x, max_x) = graph
+        .nodes
+        .iter()
+        .filter(|node| !is_dummy_node(node))
+        .filter_map(|node| node.x.zip(node.width).map(|(x, w)| (x, x + w)))
+        .chain(
+            graph
+                .edges
+                .iter()
+                .filter_map(|edge| edge.route.as_ref())
+                .flat_map(|route| route.points.iter())
+                .filter_map(|point| point.x.is_finite().then_some((point.x, point.x))),
+        )
+        .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), (a, b)| {
+            (lo.min(a), hi.max(b))
+        });
+
+    for edge_index in 0..graph.edges.len() {
+        let Some(label) = graph.edges[edge_index].label.clone() else {
+            continue;
+        };
+        let Some(route) = graph.edges[edge_index].route.as_ref() else {
+            continue;
+        };
+        let mut segments: Vec<_> = route.points.windows(2).collect();
+        segments.sort_by(|a, b| route_distance(&b[0], &b[1]).cmp(&route_distance(&a[0], &a[1])));
+        let width = label.chars().count() as i64;
+        let mut chosen = None;
+        'segments: for segment in segments {
+            let a = raster_point(&segment[0]);
+            let b = raster_point(&segment[1]);
+            let horizontal = a.1 == b.1;
+            let center_y = if horizontal { a.1 } else { (a.1 + b.1) / 2 };
+            let center_xs: Vec<i64> = if horizontal {
+                vec![(a.0 + b.0) / 2]
+            } else {
+                let right = a.0 + 1 + width / 2;
+                let left = a.0 - 1 - width / 2;
+                // Prefer the inward side of the segment: left when the
+                // segment sits in the right half of the laid-out extent.
+                if (a.0 as f64) >= (min_x + max_x) / 2.0 {
+                    vec![left, right]
+                } else {
+                    vec![right, left]
+                }
+            };
+            for &center_x in &center_xs {
+                for offset in [0_i64, -1, 1, -2, 2, -3, 3, -4, 4] {
+                    let row = center_y + offset;
+                    let left = center_x - width / 2;
+                    if label_footprint_is_clear(
+                        left,
+                        row,
+                        width,
+                        edge_index,
+                        &graph.nodes,
+                        &route_segments,
+                        &occupied_labels,
+                    ) {
+                        for x in left..left + width {
+                            occupied_labels.insert((x, row));
+                        }
+                        chosen = Some(RoutePoint {
+                            x: center_x as f64,
+                            y: (row + 1) as f64,
+                        });
+                        break 'segments;
+                    }
+                }
+            }
+        }
+        let fallback = route_label_anchor(Some(&label), &route.points);
+        graph.edges[edge_index].route.as_mut().unwrap().label_anchor = chosen.or(fallback);
+    }
+}
+
+fn label_footprint_is_clear(
+    left: i64,
+    row: i64,
+    width: i64,
+    own_edge: usize,
+    nodes: &[Node],
+    route_segments: &[Vec<RasterSegment>],
+    occupied_labels: &HashSet<(i64, i64)>,
+) -> bool {
+    row >= 0
+        && left >= 0
+        && (left..left + width).all(|x| {
+            let cell = (x, row);
+            !occupied_labels.contains(&cell)
+                && !nodes
+                    .iter()
+                    .filter(|node| !is_dummy_node(node))
+                    .any(|node| {
+                        node_cell_rect(node).is_some_and(|(nx, ny, nw, nh)| {
+                            x >= nx && x < nx + nw && row >= ny && row < ny + nh
+                        })
+                    })
+                && !route_segments.iter().enumerate().any(|(index, segments)| {
+                    index != own_edge && segments.iter().any(|segment| segment.contains(cell))
+                })
+        })
 }
 
 fn route_label_anchor(label: Option<&str>, points: &[RoutePoint]) -> Option<RoutePoint> {
@@ -1312,5 +2232,215 @@ fn shift_vertical_label_anchor(anchor: &mut RoutePoint, label: Option<&str>) {
     if let Some(label) = label {
         anchor.x += 1.0 + label.chars().count() as f64 / 2.0;
         anchor.y += 1.0;
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_interiors_are_obstacles() {
+        let nodes = vec![
+            test_node("source", 1.0, 1.0, 3.0, 3.0),
+            test_node("target", 8.0, 1.0, 3.0, 3.0),
+        ];
+
+        assert!(point_hits_real_node(&RoutePoint { x: 2.0, y: 2.0 }, &nodes));
+        assert!(point_hits_real_node(&RoutePoint { x: 9.0, y: 2.0 }, &nodes));
+    }
+
+    #[test]
+    fn unroutable_geometry_is_exposed_instead_of_restoring_a_collision() {
+        let nodes = vec![
+            test_node("source", 4.0, 4.0, 2.0, 2.0),
+            test_node("target", 14.0, 4.0, 2.0, 2.0),
+            test_node("top", 0.0, 0.0, 10.0, 1.0),
+            test_node("bottom", 0.0, 10.0, 10.0, 1.0),
+            test_node("left", 0.0, 1.0, 1.0, 9.0),
+            test_node("right", 9.0, 1.0, 1.0, 9.0),
+        ];
+        let source_port = Port {
+            x: 6.0,
+            y: 5.0,
+            side: PortSide::Right,
+        };
+        let target_port = Port {
+            x: 13.0,
+            y: 5.0,
+            side: PortSide::Left,
+        };
+
+        let perimeter = graph_perimeter(&nodes);
+        let grid = test_grid(&source_port, &target_port, &nodes, &perimeter, None);
+        assert!(
+            obstacle_avoiding_points(
+                &source_port,
+                &target_port,
+                &nodes,
+                &grid,
+                None,
+                &test_identity(&source_port, &target_port),
+                &RouteOccupancy::default(),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn required_perimeter_lane_is_present_in_route() {
+        let source_port = Port {
+            x: 11.0,
+            y: 30.0,
+            side: PortSide::Right,
+        };
+        let target_port = Port {
+            x: 12.0,
+            y: 14.5,
+            side: PortSide::Right,
+        };
+        let perimeter = GraphPerimeter {
+            max_x: 12.0,
+            max_y: 32.0,
+        };
+        let required_lane = Some(RouteLane::Vertical(20.0));
+        let grid = test_grid(&source_port, &target_port, &[], &perimeter, required_lane);
+        let points = obstacle_avoiding_points(
+            &source_port,
+            &target_port,
+            &[],
+            &grid,
+            required_lane,
+            &test_identity(&source_port, &target_port),
+            &RouteOccupancy::default(),
+        )
+        .unwrap();
+
+        assert!(
+            points.iter().any(|point| same(point.x, 20.0)),
+            "{points:#?}"
+        );
+    }
+
+    #[test]
+    fn clean_preferred_route_skips_compressed_search() {
+        let source_port = Port {
+            x: 0.0,
+            y: 1.0,
+            side: PortSide::Right,
+        };
+        let target_port = Port {
+            x: 10.0,
+            y: 1.0,
+            side: PortSide::Left,
+        };
+        let preferred = lane_route_points(&source_port, &target_port, RouteLane::Vertical(5.0));
+        let perimeter = GraphPerimeter {
+            max_x: 10.0,
+            max_y: 2.0,
+        };
+        let grid = test_grid(&source_port, &target_port, &[], &perimeter, None);
+
+        assert_eq!(
+            route_points(
+                preferred.clone(),
+                &source_port,
+                &target_port,
+                &[],
+                &grid,
+                None,
+                &test_identity(&source_port, &target_port),
+                &RouteOccupancy::default(),
+            )
+            .as_deref(),
+            Some(preferred.as_slice())
+        );
+    }
+
+    #[test]
+    fn large_coordinates_do_not_expand_the_search_grid() {
+        let source_port = Port {
+            x: 1_000_000_000.0,
+            y: 1_000_000_000.0,
+            side: PortSide::Right,
+        };
+        let target_port = Port {
+            x: 2_000_000_000.0,
+            y: 2_000_000_000.0,
+            side: PortSide::Left,
+        };
+        let perimeter = GraphPerimeter {
+            max_x: 2_000_000_001.0,
+            max_y: 2_000_000_001.0,
+        };
+        let grid = test_grid(&source_port, &target_port, &[], &perimeter, None);
+        assert!(grid.xs.len() <= 5 && grid.ys.len() <= 5);
+        assert!(grid.clear.len() <= 25);
+        assert!(
+            obstacle_avoiding_points(
+                &source_port,
+                &target_port,
+                &[],
+                &grid,
+                None,
+                &test_identity(&source_port, &target_port),
+                &RouteOccupancy::default(),
+            )
+            .is_some()
+        );
+    }
+
+    fn test_identity(source_port: &Port, target_port: &Port) -> RouteIdentity {
+        RouteIdentity {
+            source: "source".into(),
+            target: "target".into(),
+            lane_id: None,
+            source_cells: [
+                raster_point(&RoutePoint {
+                    x: source_port.x,
+                    y: source_port.y,
+                }),
+                raster_point(&outward_point(source_port)),
+            ],
+            target_cells: [
+                raster_point(&outward_point(target_port)),
+                raster_point(&RoutePoint {
+                    x: target_port.x,
+                    y: target_port.y,
+                }),
+            ],
+        }
+    }
+
+    fn test_grid(
+        source_port: &Port,
+        target_port: &Port,
+        nodes: &[Node],
+        perimeter: &GraphPerimeter,
+        required_lane: Option<RouteLane>,
+    ) -> RoutingGrid {
+        RoutingGrid::new(
+            &[Some(RouteSpec {
+                preferred: vec![],
+                source_port: source_port.clone(),
+                target_port: target_port.clone(),
+                lane_id: None,
+                required_lane,
+            })],
+            nodes,
+            perimeter,
+        )
+    }
+
+    fn test_node(id: &str, x: f64, y: f64, width: f64, height: f64) -> Node {
+        Node {
+            id: id.into(),
+            label: id.into(),
+            shape: NodeShape::Rectangle,
+            x: Some(x),
+            y: Some(y),
+            width: Some(width),
+            height: Some(height),
+        }
     }
 }

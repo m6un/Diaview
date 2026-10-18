@@ -327,12 +327,55 @@ fn phase15_shared_sink_incoming_edges_share_trunk_coordinate() {
         .map(|edge| edge.route.as_ref().unwrap())
         .collect();
     assert!(incoming.len() >= 4);
-    let trunk_y = incoming[0].points[1].y;
+    let trunk_y = incoming[0].target_port.y - 2.0;
     let lane_id = incoming[0].lane_id;
     for route in incoming {
         assert_eq!(route.lane_id, lane_id);
-        assert!((route.points[1].y - trunk_y).abs() < 0.01);
-        assert!((route.points[2].y - trunk_y).abs() < 0.01);
+        assert!(route.points.windows(2).any(|segment| {
+            (segment[0].y - trunk_y).abs() < 0.01 && (segment[1].y - trunk_y).abs() < 0.01
+        }));
+    }
+}
+
+#[test]
+fn phase15_three_edge_shared_sink_bundles_into_one_trunk() {
+    let mut graph = Graph {
+        direction: Direction::TopDown,
+        nodes: vec![
+            node("A", "Producer A", NodeShape::Rectangle),
+            node("B", "Producer B", NodeShape::Rectangle),
+            node("C", "Producer C", NodeShape::Rectangle),
+            node("SINK", "Shared sink", NodeShape::Circle),
+        ],
+        edges: vec![edge("A", "SINK"), edge("B", "SINK"), edge("C", "SINK")],
+        groups: vec![],
+    };
+    layout(&mut graph);
+    let incoming: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.target == "SINK")
+        .map(|edge| edge.route.as_ref().unwrap())
+        .collect();
+    assert_eq!(incoming.len(), 3);
+    let trunk_y = incoming[0].target_port.y - 2.0;
+    let lane_id = incoming[0].lane_id;
+    assert!(incoming.iter().any(|route| {
+        route.points.windows(2).any(|segment| {
+            (segment[0].y - trunk_y).abs() < 0.01
+                && (segment[1].y - trunk_y).abs() < 0.01
+                && (segment[0].x - segment[1].x).abs() > 0.01
+        })
+    }));
+    for route in incoming {
+        assert_eq!(route.lane_id, lane_id);
+        assert!(
+            route
+                .points
+                .iter()
+                .any(|point| (point.y - trunk_y).abs() < 0.01),
+            "route must join the shared trunk at y={trunk_y}"
+        );
     }
 }
 
@@ -624,4 +667,163 @@ fn leftright_back_edges_use_bottom_outer_perimeter_lanes() {
         .collect();
     assert_eq!(lane_ids.len(), 2);
     assert_eq!(lane_ys.len(), 2);
+}
+
+/// The live repeated-feedback routing defect: AUTH, VALIDATE, IDEMPOTENCY, and
+/// WORKFLOW back-edges into API fan out onto four separate perimeter lanes
+/// instead of sharing one deterministic trunk, while each must keep its own
+/// distinct target port on API and a complete route.
+#[test]
+fn feedback_back_edges_into_api_share_one_perimeter_trunk_lane() {
+    let input = include_str!("../fixtures/temporal_payment_feedback_regression.mmd");
+    let mut graph = diaview::parser::mermaid::parse(input).unwrap();
+    layout(&mut graph);
+
+    let back_edges: Vec<_> = graph
+        .edges
+        .iter()
+        .filter(|edge| edge.target == "API" && edge.source != "CLIENT")
+        .filter(|edge| {
+            edge.route
+                .as_ref()
+                .map(|route| route.class == EdgeClass::BackEdge)
+                .unwrap_or(false)
+        })
+        .collect();
+    let sources: HashSet<_> = back_edges.iter().map(|edge| edge.source.as_str()).collect();
+    assert_eq!(
+        sources,
+        HashSet::from(["AUTH", "VALIDATE", "IDEMPOTENCY", "WORKFLOW"]),
+        "expected exactly the four feedback back-edges into API"
+    );
+
+    let routes: Vec<_> = back_edges
+        .iter()
+        .map(|edge| edge.route.as_ref().unwrap())
+        .collect();
+
+    // Complete routes: each starts at its source port and ends at its target port.
+    for route in &routes {
+        assert!(!route.points.is_empty());
+        assert_eq!(
+            (
+                route.points.first().unwrap().x,
+                route.points.first().unwrap().y
+            ),
+            (route.source_port.x, route.source_port.y)
+        );
+        assert_eq!(
+            (
+                route.points.last().unwrap().x,
+                route.points.last().unwrap().y
+            ),
+            (route.target_port.x, route.target_port.y)
+        );
+    }
+
+    // Distinct target ports on API: no two of the four share the same port cell.
+    let target_cells: HashSet<_> = routes
+        .iter()
+        .map(|route| {
+            (
+                (route.target_port.x * 10.0).round() as i64,
+                (route.target_port.y * 10.0).round() as i64,
+            )
+        })
+        .collect();
+    assert_eq!(
+        target_cells.len(),
+        4,
+        "back-edges into API must keep distinct target ports"
+    );
+
+    // One shared deterministic perimeter trunk: same lane id plus at least
+    // one common fixed x shared by all four routes' nonzero vertical segments
+    // (TopDown perimeter lanes run at a fixed x).
+    let lane_ids: HashSet<_> = routes.iter().map(|route| route.lane_id.unwrap()).collect();
+    assert_eq!(
+        lane_ids.len(),
+        1,
+        "back-edges into a shared target must share one perimeter trunk lane id, got {lane_ids:?}"
+    );
+    let trunk_x = routes
+        .iter()
+        .map(|route| {
+            route
+                .points
+                .windows(2)
+                .filter(|pair| pair[0].x == pair[1].x && (pair[0].y - pair[1].y).abs() > 0.01)
+                .map(|pair| pair[0].x.round() as i64)
+                .collect::<HashSet<_>>()
+        })
+        .reduce(|acc: HashSet<i64>, xs| acc.intersection(&xs).copied().collect())
+        .expect("each route must have at least one nonzero vertical segment");
+    assert!(
+        !trunk_x.is_empty(),
+        "back-edges into a shared target must share a common perimeter trunk x (lane_id already proves one semantic trunk), got none"
+    );
+}
+
+/// Vertical-segment label placement prefers the inward side: a right-half
+/// vertical route (outer perimeter trunk) places its label to the left of the
+/// trunk when that footprint is clear, instead of expanding bounds rightward.
+#[test]
+fn right_side_vertical_route_places_label_on_clear_inward_side() {
+    let mut graph = Graph {
+        direction: Direction::TopDown,
+        nodes: vec![
+            node("WEBHOOK", "Temporal webhook", NodeShape::Rectangle),
+            node("WORKFLOW", "Workflow", NodeShape::Rectangle),
+            node("ACTIVITY", "Activity", NodeShape::Rectangle),
+            node("SIGNAL", "Signal loop", NodeShape::Rectangle),
+        ],
+        edges: vec![
+            edge("WEBHOOK", "WORKFLOW"),
+            edge("WORKFLOW", "ACTIVITY"),
+            edge("ACTIVITY", "SIGNAL"),
+            styled_edge("SIGNAL", "WORKFLOW", Some("loop"), EdgeStyle::Solid),
+        ],
+        groups: vec![],
+    };
+    layout(&mut graph);
+
+    let max_node_right = graph
+        .nodes
+        .iter()
+        .filter(|node| !node.id.starts_with("__dummy"))
+        .map(|node| node.x.unwrap() + node.width.unwrap())
+        .fold(0.0_f64, f64::max);
+    let route = graph
+        .edges
+        .iter()
+        .find(|edge| edge.source == "SIGNAL" && edge.target == "WORKFLOW")
+        .unwrap()
+        .route
+        .as_ref()
+        .unwrap();
+    assert_eq!(route.class, EdgeClass::BackEdge);
+
+    // The trunk is a long vertical segment right of all nodes.
+    let trunk_x = route
+        .points
+        .windows(2)
+        .filter(|pair| pair[0].x == pair[1].x && (pair[0].y - pair[1].y).abs() > 0.01)
+        .map(|pair| pair[0].x)
+        .max_by(|a, b| a.partial_cmp(b).unwrap())
+        .expect("route must have a vertical segment") as i64;
+    assert!(
+        trunk_x as f64 > max_node_right,
+        "expected a right-side perimeter trunk"
+    );
+
+    // Label anchor must sit on the inward (left) side of that trunk.
+    let anchor = route
+        .label_anchor
+        .as_ref()
+        .expect("labeled edge needs an anchor");
+    assert!(
+        anchor.x < trunk_x as f64,
+        "label anchor {anchor:?} must prefer the clear inward (left) side of trunk x={trunk_x}"
+    );
+    assert!(anchor.x >= 0.0, "label anchor must stay inside the canvas");
 }

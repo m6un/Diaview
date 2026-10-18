@@ -22,7 +22,7 @@ use ratatui::{
 use crate::app::{AppMode, AppState, UpdateStatus};
 use crate::herdr;
 use crate::model::{
-    Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape, PortSide, RoutePlan,
+    Arrowhead, Direction, EdgeClass, EdgeStyle, Graph, Group, Node, NodeShape, RoutePlan,
 };
 use crate::stencil::{ArtifactKind, NodeStencil, stencil_for_node};
 use crate::theme::{NodeTheme, Theme};
@@ -660,6 +660,32 @@ fn render_edges(graph: &Graph, frame: &mut Frame, _area: Rect, theme: &Theme) {
             render_edge(src, tgt, edge, frame, &graph.direction, &graph.nodes, theme);
         }
     }
+
+    for edge in &graph.edges {
+        if let (Some(label), Some(route)) = (&edge.label, &edge.route) {
+            if let Some(anchor) = &route.label_anchor {
+                // Layout is the sole placement authority: paint exactly at the
+                // supplied anchor, no renderer-side relocation.
+                let lx = (anchor.x.max(0.0).round() as u16)
+                    .saturating_sub((label.chars().count() / 2) as u16);
+                let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
+                draw_edge_label(
+                    frame.buffer_mut(),
+                    label,
+                    lx,
+                    ly,
+                    theme,
+                    &graph.nodes,
+                    false,
+                );
+            } else if let Some(anchor) = route.points.get(route.points.len() / 2) {
+                let lx = (anchor.x.max(0.0).round() as u16)
+                    .saturating_sub((label.chars().count() / 2) as u16);
+                let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
+                draw_edge_label(frame.buffer_mut(), label, lx, ly, theme, &graph.nodes, true);
+            }
+        }
+    }
 }
 
 fn node_center(node: &Node) -> Option<(u16, u16)> {
@@ -781,9 +807,14 @@ fn draw_edge_label(
     ly: u16,
     theme: &Theme,
     nodes: &[Node],
+    relocate: bool,
 ) {
     let label_width = label.chars().count() as u16;
-    let ly = choose_label_y(buf, lx, ly, label_width, theme, nodes);
+    let ly = if relocate {
+        choose_label_y(buf, lx, ly, label_width, theme, nodes)
+    } else {
+        ly
+    };
     let label_style = Style::default().fg(theme.edge_label).bg(Color::Reset);
 
     for (i, ch) in label.chars().enumerate() {
@@ -937,72 +968,15 @@ fn rounded_point(x: f64, y: f64) -> (u16, u16) {
     (x.max(0.0).round() as u16, y.max(0.0).round() as u16)
 }
 
-fn outward_delta(side: &PortSide) -> (i32, i32) {
-    match side {
-        PortSide::Top => (0, -1),
-        PortSide::Right => (1, 0),
-        PortSide::Bottom => (0, 1),
-        PortSide::Left => (-1, 0),
-    }
-}
-
-fn offset_point(point: (u16, u16), delta: (i32, i32)) -> (u16, u16) {
-    (
-        (point.0 as i32 + delta.0).max(0) as u16,
-        (point.1 as i32 + delta.1).max(0) as u16,
-    )
-}
-
-fn push_distinct(points: &mut Vec<(u16, u16)>, point: (u16, u16)) {
-    if points.last().copied() != Some(point) {
-        points.push(point);
-    }
-}
-
 fn routed_render_points(route: &RoutePlan) -> Vec<(u16, u16)> {
-    let source_port = rounded_point(route.source_port.x, route.source_port.y);
-    let target_port = rounded_point(route.target_port.x, route.target_port.y);
-
-    let mut points = Vec::new();
-    push_distinct(&mut points, source_port);
-    for point in &route.points {
-        push_distinct(&mut points, rounded_point(point.x, point.y));
-    }
-    push_distinct(&mut points, target_port);
-
-    if points.is_empty() {
-        return points;
-    }
-
-    let source_stub = offset_point(points[0], outward_delta(&route.source_port.side));
-    if points.get(1).copied() != Some(source_stub) {
-        points.insert(1, source_stub);
-    }
-
-    let target_index = points.len() - 1;
-    let target_tail = offset_point(points[target_index], outward_delta(&route.target_port.side));
-    if target_index == 0 || points.get(target_index - 1).copied() != Some(target_tail) {
-        points.insert(target_index, target_tail);
-
-        let tail_index = points.len() - 2;
-        if tail_index > 0 {
-            let prev = points[tail_index - 1];
-            let tail = points[tail_index];
-            if prev.0 != tail.0 && prev.1 != tail.1 {
-                let pre_tail = match route.target_port.side {
-                    PortSide::Top | PortSide::Bottom => (prev.0, tail.1),
-                    PortSide::Left | PortSide::Right => (tail.0, prev.1),
-                };
-                if pre_tail != prev && pre_tail != tail {
-                    points.insert(tail_index, pre_tail);
-                }
-            }
-        }
-    }
-
+    let mut points: Vec<_> = route
+        .points
+        .iter()
+        .map(|point| rounded_point(point.x, point.y))
+        .collect();
+    points.dedup();
     points
 }
-
 fn glyph_dirs(ch: char) -> u8 {
     match ch {
         '│' => DIR_UP | DIR_DOWN,
@@ -1206,19 +1180,6 @@ fn render_edge(
             }
         }
 
-        if let Some(label) = &edge.label {
-            let anchor = route
-                .label_anchor
-                .as_ref()
-                .or_else(|| route.points.get(route.points.len() / 2));
-            if let Some(anchor) = anchor {
-                let lx = (anchor.x.max(0.0).round() as u16)
-                    .saturating_sub((label.chars().count() / 2) as u16);
-                let ly = (anchor.y.max(0.0).round() as u16).saturating_sub(1);
-                draw_edge_label(buf, label, lx, ly, theme, all_nodes);
-            }
-        }
-
         return;
     }
 
@@ -1409,6 +1370,6 @@ fn render_edge(
             (label_x + 1, label_y)
         };
 
-        draw_edge_label(buf, label, lx, ly, theme, all_nodes);
+        draw_edge_label(buf, label, lx, ly, theme, all_nodes, true);
     }
 }
