@@ -9,12 +9,12 @@ use std::{
     collections::{BTreeMap, BinaryHeap, HashMap, HashSet, VecDeque},
 };
 
-const NODE_PADDING_X: f64 = 1.0;
-const NODE_PADDING_Y: f64 = 0.0;
 const MIN_NODE_WIDTH: f64 = 8.0;
 const MIN_NODE_HEIGHT: f64 = 3.0;
-const NODE_GAP_WITHIN_LAYER: f64 = 8.0;
-const LAYER_GAP: f64 = 5.0;
+const DEFAULT_NODE_GAP_WITHIN_LAYER: f64 = 8.0;
+const DEFAULT_LAYER_GAP: f64 = 5.0;
+const COMPACT_NODE_GAP_WITHIN_LAYER: f64 = 4.0;
+const COMPACT_LAYER_GAP: f64 = 4.0;
 const DIAMOND_WIDTH_FACTOR: f64 = 1.0;
 const GROUP_PADDING_X: f64 = 2.0;
 const GROUP_PADDING_Y: f64 = 1.0;
@@ -24,21 +24,87 @@ const SHARED_SINK_BUNDLE_MIN_DEGREE: usize = 3;
 const SHARED_SOURCE_BUNDLE_MIN_DEGREE: usize = 4;
 const PERIMETER_TELEMETRY_DEGREE: usize = 3;
 
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SimpleLayoutEngine;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutProfile {
+    #[default]
+    Default,
+    Compact,
+}
 
-impl LayoutEngine for SimpleLayoutEngine {
-    fn layout(&self, graph: &mut Graph) {
-        layout_graph(graph);
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutSpacing {
+    pub node_gap: f64,
+    pub layer_gap: f64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LayoutNodeSizing {
+    pub padding_x: f64,
+    pub min_width: f64,
+    pub min_height: f64,
+}
+
+impl LayoutProfile {
+    pub const fn spacing(self) -> LayoutSpacing {
+        match self {
+            Self::Default => LayoutSpacing {
+                node_gap: DEFAULT_NODE_GAP_WITHIN_LAYER,
+                layer_gap: DEFAULT_LAYER_GAP,
+            },
+            Self::Compact => LayoutSpacing {
+                node_gap: COMPACT_NODE_GAP_WITHIN_LAYER,
+                layer_gap: COMPACT_LAYER_GAP,
+            },
+        }
+    }
+
+    pub const fn sizing(self) -> LayoutNodeSizing {
+        match self {
+            Self::Default => LayoutNodeSizing {
+                padding_x: 1.0,
+                min_width: 8.0,
+                min_height: 3.0,
+            },
+            Self::Compact => LayoutNodeSizing {
+                padding_x: 0.0,
+                min_width: 6.0,
+                min_height: 3.0,
+            },
+        }
     }
 }
 
-fn layout_graph(graph: &mut Graph) {
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SimpleLayoutEngine {
+    pub profile: LayoutProfile,
+}
+
+impl SimpleLayoutEngine {
+    pub const fn new() -> Self {
+        Self {
+            profile: LayoutProfile::Default,
+        }
+    }
+
+    pub const fn compact() -> Self {
+        Self {
+            profile: LayoutProfile::Compact,
+        }
+    }
+}
+
+impl LayoutEngine for SimpleLayoutEngine {
+    fn layout(&self, graph: &mut Graph) {
+        layout_graph(graph, self.profile);
+    }
+}
+
+fn layout_graph(graph: &mut Graph, profile: LayoutProfile) {
     if graph.nodes.is_empty() {
         return;
     }
 
-    size_nodes(&mut graph.nodes);
+    size_nodes(&mut graph.nodes, profile.sizing());
 
     let node_indices = node_indices_by_id(&graph.nodes);
     let mut layers = assign_layers(graph, &node_indices);
@@ -47,9 +113,10 @@ fn layout_graph(graph: &mut Graph) {
     let node_indices = node_indices_by_id(&graph.nodes);
     let ordered_layers = order_layers(&layers, graph, &node_indices);
 
-    assign_positions(graph, &ordered_layers);
+    let spacing = profile.spacing();
+    assign_positions(graph, &ordered_layers, spacing);
     assign_group_bounds(graph);
-    assign_route_plans(graph);
+    assign_route_plans(graph, spacing);
 }
 
 fn node_indices_by_id(nodes: &[Node]) -> HashMap<String, usize> {
@@ -68,13 +135,13 @@ fn is_dummy_node(node: &Node) -> bool {
     is_dummy_id(&node.id)
 }
 
-fn size_nodes(nodes: &mut [Node]) {
+fn size_nodes(nodes: &mut [Node], sizing: LayoutNodeSizing) {
     for node in nodes.iter_mut() {
         let label_width = label_cell_width(node);
-        let (width, height) = node_shape_size(node, label_width);
+        let (width, height) = node_shape_size(node, label_width, sizing);
 
-        node.width = Some(width.max(MIN_NODE_WIDTH));
-        node.height = Some(height.max(MIN_NODE_HEIGHT));
+        node.width = Some(width.max(sizing.min_width));
+        node.height = Some(height.max(sizing.min_height));
     }
 }
 
@@ -82,15 +149,15 @@ fn label_cell_width(node: &Node) -> f64 {
     node_display_cell_width(node) as f64
 }
 
-fn node_shape_size(node: &Node, label_width: f64) -> (f64, f64) {
+fn node_shape_size(node: &Node, label_width: f64, sizing: LayoutNodeSizing) -> (f64, f64) {
     let width = match node.shape {
-        NodeShape::Diamond => (label_width + NODE_PADDING_X * 2.0 + 2.0) * DIAMOND_WIDTH_FACTOR,
+        NodeShape::Diamond => (label_width + sizing.padding_x * 2.0 + 2.0) * DIAMOND_WIDTH_FACTOR,
         NodeShape::Circle | NodeShape::Rectangle | NodeShape::RoundedRect | NodeShape::Database => {
-            label_width + NODE_PADDING_X * 2.0 + 2.0
+            label_width + sizing.padding_x * 2.0 + 2.0
         }
     };
 
-    (round_up_to_even(width), 1.0 + NODE_PADDING_Y * 2.0)
+    (round_up_to_even(width), sizing.min_height)
 }
 
 fn round_up_to_even(value: f64) -> f64 {
@@ -450,14 +517,14 @@ fn refresh_positions_for_layer(layer: &[usize], position_by_node: &mut [usize]) 
     }
 }
 
-fn assign_positions(graph: &mut Graph, layers: &[Vec<usize>]) {
+fn assign_positions(graph: &mut Graph, layers: &[Vec<usize>], spacing: LayoutSpacing) {
     if layers.is_empty() {
         return;
     }
 
     let left_to_right = graph.direction == Direction::LeftRight;
     let node_sizes = layout_sizes(&graph.nodes);
-    let layer_cross_spans = layer_cross_spans(layers, &node_sizes, left_to_right);
+    let layer_cross_spans = layer_cross_spans(layers, &node_sizes, left_to_right, spacing.node_gap);
     let max_cross_span = layer_cross_spans.iter().copied().fold(0.0_f64, f64::max);
     let mut main_cursor = 0.0;
 
@@ -477,10 +544,10 @@ fn assign_positions(graph: &mut Graph, layers: &[Vec<usize>]) {
             graph.nodes[node_index].x = Some(x);
             graph.nodes[node_index].y = Some(y);
             cross_cursor +=
-                cross_axis_extent(node_sizes[node_index], left_to_right) + NODE_GAP_WITHIN_LAYER;
+                cross_axis_extent(node_sizes[node_index], left_to_right) + spacing.node_gap;
         }
 
-        main_cursor += layer_main_extent + LAYER_GAP;
+        main_cursor += layer_main_extent + spacing.layer_gap;
     }
 
     align_lone_targets_after_dummy_routes(graph, layers, left_to_right);
@@ -514,20 +581,26 @@ fn layer_cross_spans(
     layers: &[Vec<usize>],
     node_sizes: &[CellSize],
     left_to_right: bool,
+    node_gap: f64,
 ) -> Vec<f64> {
     layers
         .iter()
-        .map(|layer| layer_cross_span(layer, node_sizes, left_to_right))
+        .map(|layer| layer_cross_span(layer, node_sizes, left_to_right, node_gap))
         .collect()
 }
 
-fn layer_cross_span(layer: &[usize], node_sizes: &[CellSize], left_to_right: bool) -> f64 {
+fn layer_cross_span(
+    layer: &[usize],
+    node_sizes: &[CellSize],
+    left_to_right: bool,
+    node_gap: f64,
+) -> f64 {
     layer
         .iter()
         .enumerate()
         .map(|(position, &node_index)| {
             let gap = if position + 1 < layer.len() {
-                NODE_GAP_WITHIN_LAYER
+                node_gap
             } else {
                 0.0
             };
@@ -687,7 +760,7 @@ fn assign_group_bounds(graph: &mut Graph) {
     }
 }
 
-fn assign_route_plans(graph: &mut Graph) {
+fn assign_route_plans(graph: &mut Graph, spacing: LayoutSpacing) {
     let node_by_id: HashMap<String, Node> = graph
         .nodes
         .iter()
@@ -757,7 +830,7 @@ fn assign_route_plans(graph: &mut Graph) {
             {
                 lane_allocator.reserve_backedge_bus(tgt, &graph.direction)
             } else {
-                lane_allocator.reserve_perimeter(&graph.direction, &perimeter)
+                lane_allocator.reserve_perimeter(&graph.direction, &perimeter, spacing)
             };
             let route_lane = perimeter_route_lane(&graph.direction, lane.coord);
             (Some(lane.id), route_lane, Some(route_lane))
@@ -772,7 +845,7 @@ fn assign_route_plans(graph: &mut Graph) {
         } else if *class == EdgeClass::Telemetry
             && should_route_telemetry_on_perimeter(edge, &telemetry_degrees)
         {
-            let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter);
+            let lane = lane_allocator.reserve_perimeter(&graph.direction, &perimeter, spacing);
             let route_lane = perimeter_route_lane(&graph.direction, lane.coord);
             (Some(lane.id), route_lane, Some(route_lane))
         } else {
@@ -792,7 +865,7 @@ fn assign_route_plans(graph: &mut Graph) {
         }));
     }
 
-    let grid = RoutingGrid::new(&specs, &graph.nodes, &perimeter);
+    let grid = RoutingGrid::new(&specs, &graph.nodes, &perimeter, spacing);
     let mut route_occupancy = RouteOccupancy::default();
     for (idx, edge) in graph.edges.iter_mut().enumerate() {
         let Some(spec) = &specs[idx] else {
@@ -988,17 +1061,29 @@ impl LaneAllocator {
         source_port: &Port,
         target_port: &Port,
     ) -> ReservedLane {
-        let (start, end, mid) = match direction {
-            Direction::TopDown => (
-                source_port.y.min(target_port.y).round() as i64,
-                source_port.y.max(target_port.y).round() as i64,
-                (source_port.y + target_port.y) / 2.0,
-            ),
-            Direction::LeftRight => (
-                source_port.x.min(target_port.x).round() as i64,
-                source_port.x.max(target_port.x).round() as i64,
-                (source_port.x + target_port.x) / 2.0,
-            ),
+        let (start, end, min_corridor, max_corridor, mid) = match direction {
+            Direction::TopDown => {
+                let s = source_port.y.min(target_port.y);
+                let e = source_port.y.max(target_port.y);
+                (
+                    s.round() as i64,
+                    e.round() as i64,
+                    s + 1.0,
+                    e - 1.0,
+                    (s + e) / 2.0,
+                )
+            }
+            Direction::LeftRight => {
+                let s = source_port.x.min(target_port.x);
+                let e = source_port.x.max(target_port.x);
+                (
+                    s.round() as i64,
+                    e.round() as i64,
+                    s + 1.0,
+                    e - 1.0,
+                    (s + e) / 2.0,
+                )
+            }
         };
         let key = BandKey {
             direction: direction.clone(),
@@ -1006,7 +1091,12 @@ impl LaneAllocator {
             end,
         };
         let rank = self.band_counts.entry(key).or_insert(0);
-        let coord = mid + lane_offset(*rank);
+        let raw_coord = mid + lane_offset(*rank);
+        let coord = if min_corridor <= max_corridor {
+            raw_coord.clamp(min_corridor, max_corridor)
+        } else {
+            raw_coord
+        };
         *rank += 1;
         let id = self.alloc_id();
         ReservedLane { id, coord }
@@ -1016,11 +1106,12 @@ impl LaneAllocator {
         &mut self,
         direction: &Direction,
         perimeter: &GraphPerimeter,
+        spacing: LayoutSpacing,
     ) -> ReservedLane {
         let rank = self.perimeter_counts.entry(direction.clone()).or_insert(0);
         let coord = match direction {
-            Direction::TopDown => perimeter.max_x + NODE_GAP_WITHIN_LAYER + *rank as f64,
-            Direction::LeftRight => perimeter.max_y + LAYER_GAP + *rank as f64,
+            Direction::TopDown => perimeter.max_x + spacing.node_gap + *rank as f64,
+            Direction::LeftRight => perimeter.max_y + spacing.layer_gap + *rank as f64,
         };
         *rank += 1;
         let id = self.alloc_id();
@@ -1680,9 +1771,14 @@ fn obstacle_avoiding_points(
 }
 
 impl RoutingGrid {
-    fn new(specs: &[Option<RouteSpec>], nodes: &[Node], perimeter: &GraphPerimeter) -> Self {
-        let mut xs = vec![perimeter.max_x + NODE_GAP_WITHIN_LAYER];
-        let mut ys = vec![perimeter.max_y + LAYER_GAP];
+    fn new(
+        specs: &[Option<RouteSpec>],
+        nodes: &[Node],
+        perimeter: &GraphPerimeter,
+        spacing: LayoutSpacing,
+    ) -> Self {
+        let mut xs = vec![perimeter.max_x + spacing.node_gap];
+        let mut ys = vec![perimeter.max_y + spacing.layer_gap];
         for spec in specs.iter().flatten() {
             let source_stub = outward_point(&spec.source_port);
             let target_tail = outward_point(&spec.target_port);
@@ -2429,6 +2525,7 @@ mod routing_tests {
             })],
             nodes,
             perimeter,
+            LayoutProfile::Default.spacing(),
         )
     }
 

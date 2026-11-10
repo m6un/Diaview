@@ -1,0 +1,14 @@
+flowchart TD
+    AIR[MacBook Air]
+    PRO[MacBook Pro]
+    TS[Tailscale]
+    ST[Syncthing]
+    VPS[Hermes VPS]
+    VAULT[(Obsidian)]
+
+    AIR -->|Migration| PRO
+    PRO --> TS
+    PRO --> ST
+    TS -->|Network| VPS
+    ST -->|Trust| VPS
+    VPS -->|Sync| VAULT
