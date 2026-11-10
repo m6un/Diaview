@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use diaview::layout::layout;
+use diaview::layout::{layout, layout_compact};
 use diaview::model::*;
 use diaview::testdata::fixtures;
 
@@ -826,4 +826,70 @@ fn right_side_vertical_route_places_label_on_clear_inward_side() {
         "label anchor {anchor:?} must prefer the clear inward (left) side of trunk x={trunk_x}"
     );
     assert!(anchor.x >= 0.0, "label anchor must stay inside the canvas");
+}
+
+#[test]
+fn compact_mode_reduces_footprint_while_preserving_invariants() {
+    let mut default_graph = fixtures::diamond_decision();
+    layout(&mut default_graph);
+    assert_all_positioned(&default_graph);
+    assert_no_overlaps(&default_graph);
+
+    let mut compact_graph = fixtures::diamond_decision();
+    layout_compact(&mut compact_graph);
+    assert_all_positioned(&compact_graph);
+    assert_no_overlaps(&compact_graph);
+
+    let extent = |g: &Graph| {
+        let mut max_x = 0.0_f64;
+        let mut max_y = 0.0_f64;
+        for node in &g.nodes {
+            if let (Some(x), Some(y), Some(w), Some(h)) = (node.x, node.y, node.width, node.height)
+            {
+                max_x = max_x.max(x + w);
+                max_y = max_y.max(y + h);
+            }
+        }
+        for edge in &g.edges {
+            if let Some(route) = &edge.route {
+                for pt in &route.points {
+                    max_x = max_x.max(pt.x);
+                    max_y = max_y.max(pt.y);
+                }
+            }
+        }
+        (max_x, max_y)
+    };
+
+    let (def_x, def_y) = extent(&default_graph);
+    let (cmp_x, cmp_y) = extent(&compact_graph);
+
+    assert!(
+        cmp_x < def_x,
+        "compact width ({cmp_x}) should be smaller than default width ({def_x})"
+    );
+    assert!(
+        cmp_y < def_y,
+        "compact height ({cmp_y}) should be smaller than default height ({def_y})"
+    );
+
+    for edge in &compact_graph.edges {
+        let route = edge.route.as_ref().expect("edge must have route");
+        assert!(route.points.len() >= 2);
+        assert_eq!(route.points.first().unwrap().x, route.source_port.x);
+        assert_eq!(route.points.first().unwrap().y, route.source_port.y);
+        assert_eq!(route.points.last().unwrap().x, route.target_port.x);
+        assert_eq!(route.points.last().unwrap().y, route.target_port.y);
+
+        for segment in route.points.windows(2) {
+            let dx = (segment[0].x - segment[1].x).abs();
+            let dy = (segment[0].y - segment[1].y).abs();
+            assert!(
+                dx < 0.001 || dy < 0.001,
+                "segment from {:?} to {:?} must be orthogonal",
+                segment[0],
+                segment[1]
+            );
+        }
+    }
 }

@@ -9,6 +9,7 @@ const EPS: f64 = 0.01;
 const TEMPORAL_LAYOUT_REGRESSION: &str = include_str!("../fixtures/temporal_layout_regression.mmd");
 const TEMPORAL_PAYMENT_FEEDBACK_REGRESSION: &str =
     include_str!("../fixtures/temporal_payment_feedback_regression.mmd");
+const COMPACT_BRANCHING_REPRO: &str = include_str!("../fixtures/compact_branching_repro.mmd");
 
 type MermaidFixture = (&'static str, &'static str);
 
@@ -159,6 +160,129 @@ fn basic_layout_invariants_hold_for_small_baselines() {
         layout(&mut graph);
         assert_layout_invariants(&name, &graph).unwrap();
     }
+}
+
+#[test]
+fn compact_mode_preserves_routing_invariants_on_branching_repro() {
+    let mut default_graph = parse(COMPACT_BRANCHING_REPRO).unwrap();
+    layout(&mut default_graph);
+    assert_layout_invariants("default branching repro", &default_graph).unwrap();
+
+    let mut compact_graph = parse(COMPACT_BRANCHING_REPRO).unwrap();
+    diaview::layout::layout_compact(&mut compact_graph);
+    assert_layout_invariants("compact branching repro", &compact_graph).unwrap();
+
+    for id in ["AIR", "PRO", "TS", "ST", "VPS", "VAULT"] {
+        let def_node = default_graph.nodes.iter().find(|n| n.id == id).unwrap();
+        let cmp_node = compact_graph.nodes.iter().find(|n| n.id == id).unwrap();
+        assert!(
+            cmp_node.width.unwrap() <= def_node.width.unwrap(),
+            "compact node {id} width {} should be <= default width {}",
+            cmp_node.width.unwrap(),
+            def_node.width.unwrap()
+        );
+        assert_eq!(
+            cmp_node.height.unwrap(),
+            3.0,
+            "compact node {id} height should be 3.0"
+        );
+        assert_eq!(
+            def_node.height.unwrap(),
+            3.0,
+            "default node {id} height should be 3.0"
+        );
+    }
+
+    let extent = |g: &Graph| {
+        let mut max_x = 0.0_f64;
+        let mut max_y = 0.0_f64;
+        for node in &g.nodes {
+            if let (Some(x), Some(y), Some(w), Some(h)) = (node.x, node.y, node.width, node.height)
+            {
+                max_x = max_x.max(x + w);
+                max_y = max_y.max(y + h);
+            }
+        }
+        (max_x, max_y)
+    };
+    let (def_x, def_y) = extent(&default_graph);
+    let (cmp_x, cmp_y) = extent(&compact_graph);
+    assert!(
+        cmp_x < def_x,
+        "compact width should be smaller than default"
+    );
+    assert!(
+        cmp_y < def_y,
+        "compact height should be smaller than default"
+    );
+}
+
+#[test]
+fn compact_mode_preserves_routing_invariants_on_five_node_pipeline() {
+    let five_node = r#"
+flowchart TD
+    USER((User))
+    APP[Web App]
+    API[API]
+    DB[(Database)]
+    WORKER[Worker]
+    USER --> APP
+    APP --> API
+    API --> DB
+    API --> WORKER
+    WORKER --> DB
+"#;
+    let mut default_graph = parse(five_node).unwrap();
+    layout(&mut default_graph);
+    assert_layout_invariants("default 5-node pipeline", &default_graph).unwrap();
+
+    let mut compact_graph = parse(five_node).unwrap();
+    diaview::layout::layout_compact(&mut compact_graph);
+    assert_layout_invariants("compact 5-node pipeline", &compact_graph).unwrap();
+
+    for id in ["USER", "APP", "API", "WORKER", "DB"] {
+        let def_node = default_graph.nodes.iter().find(|n| n.id == id).unwrap();
+        let cmp_node = compact_graph.nodes.iter().find(|n| n.id == id).unwrap();
+        assert!(
+            cmp_node.width.unwrap() <= def_node.width.unwrap(),
+            "compact node {id} width {} should be <= default width {}",
+            cmp_node.width.unwrap(),
+            def_node.width.unwrap()
+        );
+        assert_eq!(
+            cmp_node.height.unwrap(),
+            3.0,
+            "compact node {id} height should be 3.0"
+        );
+        assert_eq!(
+            def_node.height.unwrap(),
+            3.0,
+            "default node {id} height should be 3.0"
+        );
+    }
+
+    let extent = |g: &Graph| {
+        let mut max_x = 0.0_f64;
+        let mut max_y = 0.0_f64;
+        for node in &g.nodes {
+            if let (Some(x), Some(y), Some(w), Some(h)) = (node.x, node.y, node.width, node.height)
+            {
+                max_x = max_x.max(x + w);
+                max_y = max_y.max(y + h);
+            }
+        }
+        (max_x, max_y)
+    };
+    let (def_x, def_y) = extent(&default_graph);
+    let (cmp_x, cmp_y) = extent(&compact_graph);
+    assert!(
+        cmp_x < def_x,
+        "compact width should be smaller than default"
+    );
+    assert!(
+        cmp_y < def_y,
+        "compact height should be smaller than default"
+    );
 }
 
 #[test]

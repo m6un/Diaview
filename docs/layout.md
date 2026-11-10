@@ -45,8 +45,13 @@ Public entry points:
 
 ```rust
 layout::layout(&mut graph);
+layout::layout_compact(&mut graph);
 layout::layout_with(&engine, &mut graph);
 ```
+
+`SimpleLayoutEngine` supports profiles:
+- `LayoutProfile::Default` — standard terminal spacing (node gap 8, layer gap 5, card height 3)
+- `LayoutProfile::Compact` — compact spacing (node gap 4, layer gap 4, card height 3) for reduced cell footprint without route collisions
 
 ## Route planning responsibilities
 

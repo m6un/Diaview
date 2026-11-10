@@ -141,7 +141,31 @@ fn herdr_requires_pane_env() {
 fn help_prints_usage() {
     let output = bin().arg("--help").output().unwrap();
     assert!(output.status.success());
-    assert!(String::from_utf8_lossy(&output.stdout).contains("USAGE"));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("USAGE"));
+    assert!(stdout.contains("--compact"));
+}
+
+#[test]
+fn explicit_stdin_with_compact_and_inline_succeeds() {
+    let mut child = bin()
+        .args(["--inline", "--compact", "-"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(simple_diagram().as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("A"));
+    assert!(stdout.contains("B"));
 }
 
 #[test]

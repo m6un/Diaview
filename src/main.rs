@@ -11,6 +11,7 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let mut inline = false;
+    let mut compact = false;
     let mut herdr_file: Option<String> = None;
     let mut sidecar: Option<(String, String)> = None;
     let mut input: Option<String> = None;
@@ -20,6 +21,7 @@ fn run() -> Result<(), String> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--inline" | "-i" => inline = true,
+            "--compact" => compact = true,
             "--herdr" => {
                 herdr_file = Some(
                     args.next()
@@ -37,7 +39,7 @@ fn run() -> Result<(), String> {
             }
             "--help" | "-h" => {
                 println!(
-                    "Diaview\n\nUSAGE:\n    diaview [--inline] [diagram.mmd | -]\n    diaview --herdr diagram.mmd\n\nOPTIONS:\n    -i, --inline    Render ANSI output to stdout\n    --herdr         Open a Herdr sidecar pane for agent-backed edits\n    -h, --help      Print help\n    -V, --version   Print version\n\nREQUIRES:\n    Nerd Fonts v3 glyph support"
+                    "Diaview\n\nUSAGE:\n    diaview [--inline] [--compact] [diagram.mmd | -]\n    diaview --herdr diagram.mmd\n\nOPTIONS:\n    -i, --inline    Render ANSI output to stdout\n        --compact   Use compact layout spacing\n    --herdr         Open a Herdr sidecar pane for agent-backed edits\n    -h, --help      Print help\n    -V, --version   Print version\n\nREQUIRES:\n    Nerd Fonts v3 glyph support"
                 );
                 return Ok(());
             }
@@ -64,13 +66,13 @@ fn run() -> Result<(), String> {
         }
         let path = Path::new(&path);
         let source = read_file(path)?;
-        let graph = parse_and_layout(&source)?;
+        let graph = parse_and_layout(&source, compact)?;
         return canvas::render_herdr_sidecar(&graph, path, &origin, source)
             .map_err(|e| format!("Render error: {e}"));
     }
 
     if let Some(path) = herdr_file {
-        if inline || input.is_some() || from_stdin || path == "-" {
+        if inline || compact || input.is_some() || from_stdin || path == "-" {
             return Err("--herdr requires a real Mermaid file and cannot use stdin".into());
         }
         let origin = std::env::var("HERDR_PANE_ID").map_err(|_| {
@@ -95,7 +97,7 @@ fn run() -> Result<(), String> {
         }
     };
 
-    let graph = parse_and_layout(&input)?;
+    let graph = parse_and_layout(&input, compact)?;
 
     if inline || from_stdin {
         canvas::render_inline(&graph).map_err(|e| format!("Render error: {e}"))
@@ -104,9 +106,13 @@ fn run() -> Result<(), String> {
     }
 }
 
-fn parse_and_layout(input: &str) -> Result<diaview::model::Graph, String> {
+fn parse_and_layout(input: &str, compact: bool) -> Result<diaview::model::Graph, String> {
     let mut graph = mermaid::parse(input).map_err(|e| format!("Parse error: {e}"))?;
-    layout::layout(&mut graph);
+    if compact {
+        layout::layout_compact(&mut graph);
+    } else {
+        layout::layout(&mut graph);
+    }
     Ok(graph)
 }
 
