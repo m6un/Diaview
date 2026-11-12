@@ -133,6 +133,20 @@ See [docs/parser.md](../../docs/parser.md) for the full parsing grammar.
 
 ---
 
+## Wide-diagram behavior
+
+Pi's component contract requires every rendered line to fit within the available terminal width (`Component.render(width)`).
+
+When a diagram is wider than the available panel:
+- Each line is clipped to `width` using ANSI-aware boundary truncation.
+- A deliberate, user-visible warning line is appended:
+  ```text
+  ⚠ diagram clipped: 120 cols wide (terminal: 80 cols) — enlarge terminal for full diagram
+  ```
+- All output lines strictly honor the terminal width limit.
+
+---
+
 ## Fallback behaviour
 
 | Situation | What the tool returns |
@@ -140,24 +154,40 @@ See [docs/parser.md](../../docs/parser.md) for the full parsing grammar.
 | `diaview` renders successfully | ANSI diagram shown directly in transcript |
 | Parse error or unsupported syntax | ⚠ label + fenced Mermaid block + stderr |
 | Binary not found | ⚠ label + fenced Mermaid block + install hint |
+| Execution timeout (> 15s) | ⚠ label (`rendering timed out`) + fenced Mermaid block |
+| Output limit exceeded (> 10 MB stdout) | ⚠ label (`output limit exceeded`) + fenced Mermaid block |
+| Error log limit exceeded (> 64 KB stderr) | ⚠ label (`error log limit exceeded`) + fenced Mermaid block |
 
 The model always receives the tool result as text content, so it can still
 refer to the diagram even when rendering fails.
 
 ---
 
-## Development
+## Development & testing
 
-No build step is required.
+Pi loads TypeScript extensions directly via `jiti`; no build step is needed for runtime.
+
+### Running extension tests
+
+The extension includes automated unit tests covering binary discovery, subprocess bounding, timeout escalation, output limits, error fallback, and wide-diagram contract compliance.
 
 ```bash
-# Quick smoke-test: verify diaview produces output on stdin
+cd integrations/pi
+npm ci
+npm run check   # Type-check with tsc --noEmit
+npm test        # Run unit tests via node --test
+```
+
+### Manual smoke-testing
+
+```bash
+# Verify diaview produces output on stdin
 printf 'flowchart TD\n  A[Client] --> B{Auth}\n  B -->|ok| C[API]\n' | diaview --inline --compact -
 
-# Load extension for one session
+# Load extension for one Pi session
 pi --extension ./integrations/pi/index.ts
 
-# Run Diaview's own test suite (from repo root)
+# Run Diaview's Rust test suite (from repo root)
 cargo test
 cargo check
 ```

@@ -16,3 +16,12 @@ jobs:
       - run: cargo check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: integrations/pi
+      - run: npm run check
+        working-directory: integrations/pi
+      - run: npm test
+        working-directory: integrations/pi
