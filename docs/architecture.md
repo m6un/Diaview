@@ -74,11 +74,25 @@ Renderer routing should be glyph painting first. It consumes layout-owned `Route
 
 ### Interaction
 
-The planned interactive layer will add app state, selected nodes, keyboard/mouse navigation, viewport movement, status bar, and an action bar.
+The interactive layer adds app state, selected nodes, keyboard navigation, status bar, and an action bar.
+
+Implemented (`src/app.rs`, `src/renderer/canvas.rs`):
+
+- `AppState` tracks the current graph, selected node id, and mode (`Browsing`, `Prompt`, `Waiting`)
+- `Tab` / `Shift+Tab` cycles the selection through real nodes in visual flow order; dummy nodes are skipped
+- The selected card renders with a strong blue highlight
+- Fullscreen mode runs a persistent Ratatui event loop and reserves the bottom row for a status bar
+- Herdr sidecar mode (`--herdr-sidecar`) enables an action bar: `i` or `Enter` opens a one-line prompt, `Enter` dispatches via `herdr agent prompt`, and the sidecar polls the file for agent-written updates
+
+Unfinished: bounded panning for diagrams larger than the terminal.
 
 ### Agent integration
 
-The long-term Visual REPL loop uses structured JSON IPC so a selected node plus user instruction can be sent back to an AI agent.
+The Visual REPL loop has two active modes and one dormant protocol:
+
+- **Inline rendering** (`diaview --inline`): renders a diagram to stdout as ANSI text; consumed by the Pi extension tool (`integrations/pi/index.ts`) which pipes Mermaid source to `diaview --inline --compact -` and shows the result directly in Pi's chat transcript.
+- **Herdr sidecar** (`diaview --herdr diagram.mmd`): opens a Herdr-managed pane, runs the sidecar there, and lets a user select a node and dispatch instructions via `herdr agent prompt`. The sidecar polls the file for agent-written edits and live-reloads the diagram.
+- **ActionDocument JSON IPC** (dormant): a v1 schema exists for future use, but no JSON is written to stdout in current runtime paths.
 
 ## Source map
 
@@ -87,9 +101,11 @@ The long-term Visual REPL loop uses structured JSON IPC so a selected node plus 
 - `src/parser/mermaid.rs` — Mermaid flowchart parser
 - `src/layout.rs` — layout abstraction and public layout entry points
 - `src/layout/simple.rs` — default native layout engine, group bounds, edge classification, route planning
-- `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, routed edge drawing
+- `src/app.rs` — `AppState`, mode transitions (Browsing/Prompt/Waiting), selection logic, reload behavior
+- `src/renderer/canvas.rs` — Ratatui renderer, inline renderer, routed edge drawing, `render_app_to_frame`, status bar
 - `src/theme.rs` — static neutral dark theme with blue semantic accents
 - `src/testdata.rs` — reusable graph and Mermaid fixtures
-- `src/main.rs` — CLI entry point
-- `tests/` — integration tests for parser, layout, renderer, and fixtures
+- `src/main.rs` — CLI entry point (`--inline`, `--herdr`, `--herdr-sidecar`, stdin)
+- `tests/` — integration tests for parser, layout, renderer, app state, and fixtures
 - `fixtures/` — sample Mermaid diagrams used for smoke/visual inspection
+- `integrations/pi/index.ts` — Pi extension: model-callable `diaview` tool for inline chat rendering

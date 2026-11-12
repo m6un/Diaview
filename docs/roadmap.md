@@ -82,77 +82,79 @@ The baseline is not a full graph drawing engine. Dense labels, deeply nested cyc
 
 ## Phase 2: Interactive Navigation
 
-**Status: Next up**
+**Status: Core complete; panning unfinished**
 
 Turn the static renderer into a navigable, interactive TUI application.
 
 ### 2.1 Selection Engine
 
-- [ ] Add app state with `selected_node: Option<String>`
-- [ ] Highlight selected node strongly
-- [ ] `Tab` / `Shift+Tab` to cycle selection through nodes
+- [x] Add app state with `selected_node: Option<String>` (`AppState` in `src/app.rs`)
+- [x] Highlight selected node strongly (blue fill via `theme.accent_primary`)
+- [x] `Tab` / `Shift+Tab` to cycle selection through nodes following visual flow
+- [x] Dummy routing nodes (`__dummy*`) are never selectable
 - [ ] `hjkl` / arrow keys for spatial navigation using node coordinates
 - [ ] Mouse click to select a node directly
 
 ### 2.2 Persistent Event Loop
 
-- [ ] Replace render-once/wait-for-quit with a proper Ratatui event loop
-- [ ] Continuous rendering with state updates
-- [ ] Status bar at the bottom showing selected node info and key hints
+- [x] Persistent Ratatui event loop replaces render-once/wait-for-quit
+- [x] Continuous rendering with state updates
+- [x] Status bar at the bottom showing selected node info and key hints
 
 ### 2.3 Pan & Zoom
 
-- [ ] Viewport offset for panning large diagrams
+- [ ] Viewport offset for panning large diagrams *(unfinished — fit-to-screen only)*
 - [ ] `+` / `-` for spacing/zoom levels
 - [ ] Mouse drag for panning
 - [ ] Keep selected node visible while navigating
 
 ---
 
-## Phase 3: The Action Bar & Agent Integration
+## Phase 3: The Action Bar & Herdr Agent Integration
 
-**Status: Planned**
+**Status: Herdr sidecar implemented; JSON IPC schema dormant**
 
-The core innovation — a command bar that lets you issue natural language instructions targeted at specific nodes, creating a visual feedback loop with an AI agent.
+A command bar lets you issue natural language instructions targeted at specific nodes, creating a visual feedback loop with a Herdr-managed AI agent.
 
-### 3.1 The Action Bar
+### 3.1 The Action Bar (Herdr sidecar only)
 
-- [ ] `i` or `Enter` on a selected node opens a text input widget at the bottom of the screen
-- [ ] User types a natural language instruction, e.g. "Add a Redis cache before this"
-- [ ] `Esc` cancels, `Enter` submits
+- [x] `i` or `Enter` on a selected node opens a one-line action prompt
+- [x] Character keys append text; `Backspace` removes one character
+- [x] `Esc` cancels the prompt and returns to browsing
+- [x] `Enter` submits only non-whitespace prompt text; sidecar enters Waiting state
+- [x] `herdr agent prompt` is dispatched with selected node id/label, file path, and instruction
+- [x] File polling detects agent-written Mermaid changes and live-reloads the diagram
+- [x] Invalid intermediate Mermaid keeps last valid graph on screen with an error status
+- [x] `Esc` while waiting stops local polling; `q` while browsing exits
 
 ### 3.2 JSON IPC Protocol
 
-When the user submits a prompt, Diaview outputs structured JSON to stdout:
+The `ActionDocument` v1 schema exists in the codebase for future use but is **not** the active runtime path. The Herdr sidecar uses `herdr agent prompt` and file polling instead. No JSON is written to stdout on prompt submission.
 
 ```json
 {
-  "action": "modify",
-  "selected_node": {
-    "id": "B",
-    "label": "JWT Validator",
-    "shape": "diamond"
-  },
+  "protocol": "diaview.action",
+  "version": 1,
+  "selected_node": { "id": "B", "label": "JWT Validator" },
   "prompt": "Add a Redis cache layer before this for token revocation",
-  "current_graph": "graph TD\n    A[Request] --> B{JWT Validator}\n    ..."
+  "mermaid": "graph TD\n    A[Request] --> B{JWT Validator}\n    ..."
 }
 ```
 
-### 3.3 Pi Extension (`diaview.ts`)
+### 3.3 Pi Extension — interactive selected-node actions
 
-- [ ] Register a custom `pi` tool: `open_diagram({ mermaid: string })`
-- [ ] Suspend Pi's TUI and launch `diaview --interactive` with Mermaid via stdin
-- [ ] On exit, read JSON payload from stdout
+- [ ] Register a Pi tool that suspends Pi's TUI and launches `diaview --interactive`
+- [ ] On exit, read ActionDocument JSON from stdout
 - [ ] Feed selected-node context + prompt back to the agent
 - [ ] Agent generates updated Mermaid and the tool can relaunch Diaview
+
+This is separate from the **inline rendering** Pi tool (see Phase 4), which is already implemented.
 
 ---
 
 ## Phase 4: Inline Rendering Integration
 
-**Status: Core CLI complete, chat integration planned**
-
-The CLI already supports inline rendering:
+**Status: Complete** — CLI and Pi extension both implemented.
 
 ```bash
 cargo run -- --inline
@@ -160,7 +162,7 @@ cargo run -- --inline fixtures/simple.mmd
 cargo run -- --inline fixtures/complex_architecture.mmd
 ```
 
-Implemented:
+CLI (`diaview --inline`):
 
 - [x] Skip alternate screen and raw mode
 - [x] Render through Ratatui `TestBackend`
@@ -168,12 +170,13 @@ Implemented:
 - [x] Work naturally in terminal scrollback
 - [x] Test via `render_to_string`
 
-Still planned:
+Pi extension (`integrations/pi/index.ts`):
 
-- [ ] Intercept Mermaid code blocks in Pi/agent output
-- [ ] Pipe them through `diaview --inline` automatically
-- [ ] Render ANSI diagrams directly in chat flow
-- [ ] Fall back to raw Mermaid text if `diaview` binary is unavailable
+- [x] Model-callable `diaview` tool registered via Pi extension API
+- [x] Pipes Mermaid source to `diaview --inline --compact -` on stdin
+- [x] ANSI diagram rendered inline in Pi chat transcript via `AnsiDiagram` component
+- [x] Falls back to fenced Mermaid block + error note if binary not found or parse fails
+- [x] `⚠ diaview fallback` label shown in Pi TUI on error
 
 ---
 
@@ -226,11 +229,13 @@ Graph IR
 Layout + route planning
   ↓
 Ratatui renderer
-  ├─ fullscreen terminal view
-  └─ inline ANSI output
+  ├─ fullscreen TUI (event loop, selection, status bar)
+  │   ├─ standalone browsing (Tab/Shift+Tab, q/Esc)
+  │   └─ Herdr sidecar (action bar, herdr agent prompt, file-poll reload)
+  └─ inline ANSI output (--inline, Pi extension tool)
 
-Future interactive path:
-fullscreen TUI → selected node/action bar → JSON IPC → Pi/AI agent
+Future interactive path (dormant):
+fullscreen TUI → selected node/action bar → ActionDocument JSON → Pi/AI agent
 ```
 
 ## Guiding Principles

@@ -103,7 +103,7 @@ For deeper technical documentation, see:
 - [docs/parser.md](docs/parser.md) — Mermaid grammar, normalization, and parsing rules.
 - [docs/layout.md](docs/layout.md) — Layering, barycenter crossing reduction, port assignment, and lane reservations.
 - [docs/rendering.md](docs/rendering.md) — Character grid rasterization, Ratatui canvas widgets, and ANSI truecolor styling.
-- [docs/interaction.md](docs/interaction.md) — AppState, persistent event loops, and Herdr sidecar protocol.
+- [docs/interaction.md](docs/interaction.md) — AppState, event loop, visual-flow selection, Herdr sidecar, and status bar.
 - [docs/architecture.md](docs/architecture.md) — End-to-end component dataflow and module boundaries.
 - [docs/roadmap.md](docs/roadmap.md) — Long-term milestones, sequence diagrams, and expanded Visual REPL capabilities.
 
@@ -129,9 +129,10 @@ Layout Engine (src/layout/simple.rs)
       │
       ▼
 Ratatui Canvas Renderer (src/renderer/canvas.rs)
-      ├── Fullscreen TUI (raw mode, selection loop, status bar)
-      ├── Inline ANSI output (direct to scrollback/stdout)
-      └── Herdr Sidecar (action bar, IPC dispatch, live file watcher)
+      ├── Fullscreen TUI (event loop, Tab/Shift+Tab selection, status bar)
+      │     ├── Standalone browsing (q/Esc to quit)
+      │     └── Herdr sidecar (action bar, herdr agent prompt dispatch, file-poll reload)
+      └── Inline ANSI output (--inline; consumed by Pi extension for chat rendering)
 ```
 
 ---
