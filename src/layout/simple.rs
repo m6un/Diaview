@@ -17,7 +17,7 @@ const COMPACT_NODE_GAP_WITHIN_LAYER: f64 = 4.0;
 const COMPACT_LAYER_GAP: f64 = 4.0;
 const DIAMOND_WIDTH_FACTOR: f64 = 1.0;
 const GROUP_PADDING_X: f64 = 2.0;
-const GROUP_PADDING_Y: f64 = 1.0;
+const GROUP_PADDING_Y: f64 = 2.0;
 const DUMMY_NODE_PREFIX: &str = "__dummy";
 const BARYCENTER_SWEEPS: usize = 4;
 const SHARED_SINK_BUNDLE_MIN_DEGREE: usize = 3;
@@ -718,6 +718,52 @@ fn align_target_with_dummy(
 fn assign_group_bounds(graph: &mut Graph) {
     if graph.groups.is_empty() {
         return;
+    }
+
+    let mut min_group_x = f64::INFINITY;
+    let mut min_group_y = f64::INFINITY;
+
+    let node_by_id: HashMap<String, &Node> = graph
+        .nodes
+        .iter()
+        .filter(|node| !is_dummy_node(node))
+        .map(|node| (node.id.clone(), node))
+        .collect();
+
+    for group in &graph.groups {
+        for node_id in &group.node_ids {
+            let Some(node) = node_by_id.get(node_id) else {
+                continue;
+            };
+            if let Some(x) = node.x {
+                min_group_x = min_group_x.min(x);
+            }
+            if let Some(y) = node.y {
+                min_group_y = min_group_y.min(y);
+            }
+        }
+    }
+
+    let shift_x = if min_group_x.is_finite() && min_group_x < GROUP_PADDING_X {
+        GROUP_PADDING_X - min_group_x
+    } else {
+        0.0
+    };
+    let shift_y = if min_group_y.is_finite() && min_group_y < GROUP_PADDING_Y {
+        GROUP_PADDING_Y - min_group_y
+    } else {
+        0.0
+    };
+
+    if shift_x > 0.0 || shift_y > 0.0 {
+        for node in &mut graph.nodes {
+            if let Some(x) = &mut node.x {
+                *x += shift_x;
+            }
+            if let Some(y) = &mut node.y {
+                *y += shift_y;
+            }
+        }
     }
 
     let node_by_id: HashMap<String, &Node> = graph

@@ -51,7 +51,7 @@ Common engineering artifacts use a curated `nf-md-*` icon vocabulary, including 
 
 Mermaid `subgraph` blocks become `Graph.groups`.
 
-Layout computes group bounds after member nodes are positioned. Renderer draws muted cluster boxes behind nodes and edges so grouped architecture sections remain visible without overpowering the primary flow.
+Layout computes group bounds after member nodes are positioned, ensuring clean clearance around enclosed node cards and shadows so that cross-group edges cross boundaries at deliberate junction glyphs without overwriting border segments. Renderer draws muted cluster boxes behind nodes and edges so grouped architecture sections remain visible without overpowering the primary flow.
 
 ## Edge rendering
 

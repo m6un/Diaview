@@ -1,0 +1,17 @@
+flowchart TD
+  T[Telegram] --> H[Hermes gateway]
+
+  subgraph VPS
+    C[CDP loopback]
+    B[Chrome as Hermes browser]
+    P[Persistent X profile]
+    R[Sandboxed renderers]
+  end
+
+  X[X]
+
+  H --> C
+  C --> B
+  B --> P
+  B --> R
+  R --> X
