@@ -1356,3 +1356,236 @@ fn dump_complex_architecture_graph() {
     );
     dump_graph("complex architecture", &graph, width, height);
 }
+
+#[test]
+fn issue_10_subgraph_boundaries_not_corrupted_by_shadows_or_edges() {
+    let source = include_str!("../fixtures/issue_10_subgraph_boundary.mmd");
+    let mut graph = diaview::parser::mermaid::parse(source).unwrap();
+    diaview::layout::layout(&mut graph);
+
+    // 1. Invariant assertions on layout geometry:
+    let group = graph
+        .groups
+        .iter()
+        .find(|g| g.id == "VPS")
+        .expect("group VPS must exist");
+    let gx = group.x.expect("group x must be set");
+    let gy = group.y.expect("group y must be set");
+    let gw = group.width.expect("group width must be set");
+    let gh = group.height.expect("group height must be set");
+
+    let group_left = gx as u16;
+    let group_top = gy as u16;
+    let group_right = gx as u16 + gw.ceil() as u16 - 1;
+    let group_bottom = gy as u16 + gh.ceil() as u16 - 1;
+
+    for node_id in &group.node_ids {
+        let node = graph
+            .nodes
+            .iter()
+            .find(|n| n.id == *node_id)
+            .expect("member node exists");
+        let nx = node.x.expect("node x");
+        let ny = node.y.expect("node y");
+        let nw = node.width.expect("node w");
+        let nh = node.height.expect("node h");
+
+        assert!(
+            nx >= gx + 1.0,
+            "node {} card x ({}) must be inside group left border ({})",
+            node_id,
+            nx,
+            gx
+        );
+        assert!(
+            ny >= gy + 1.0,
+            "node {} card y ({}) must be inside group top border ({})",
+            node_id,
+            ny,
+            gy
+        );
+        assert!(
+            nx + nw < gx + gw - 1.0,
+            "node {} right shadow ({}) must be strictly inside group right border ({})",
+            node_id,
+            nx + nw,
+            gx + gw - 1.0
+        );
+        assert!(
+            ny + nh < gy + gh - 1.0,
+            "node {} bottom shadow ({}) must be strictly inside group bottom border ({})",
+            node_id,
+            ny + nh,
+            gy + gh - 1.0
+        );
+    }
+
+    // 2. Renderer assertions:
+    let (width, height) = graph_bounds(&graph);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_to_frame(&graph, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    assert_eq!(
+        buf[(group_left, group_top)].symbol(),
+        "┌",
+        "top-left corner must be ┌"
+    );
+    assert_eq!(
+        buf[(group_right, group_top)].symbol(),
+        "┐",
+        "top-right corner must be ┐"
+    );
+    assert_eq!(
+        buf[(group_left, group_bottom)].symbol(),
+        "└",
+        "bottom-left corner must be └, not overwritten by shadow"
+    );
+    assert_eq!(
+        buf[(group_right, group_bottom)].symbol(),
+        "┘",
+        "bottom-right corner must be ┘"
+    );
+
+    for x in group_left..=group_right {
+        assert_ne!(
+            buf[(x, group_bottom)].symbol(),
+            "▔",
+            "bottom border at x={} was corrupted by node shadow",
+            x
+        );
+    }
+
+    let r_edge = graph
+        .edges
+        .iter()
+        .find(|e| e.source == "R" && e.target == "X")
+        .expect("R -> X edge exists");
+    let r_route = r_edge.route.as_ref().expect("R -> X route exists");
+    let exit_x = r_route.source_port.x.round() as u16;
+    assert_eq!(
+        buf[(exit_x, group_bottom)].symbol(),
+        "┼",
+        "R -> X must cross bottom boundary at a single doorway junction ┼"
+    );
+
+    for x in (group_left + 1)..group_right {
+        if x != exit_x {
+            assert_eq!(
+                buf[(x, group_bottom)].symbol(),
+                "─",
+                "bottom border cell at x={} must be ─",
+                x
+            );
+        }
+    }
+
+    let h_edge = graph
+        .edges
+        .iter()
+        .find(|e| e.source == "H" && e.target == "C")
+        .expect("H -> C edge exists");
+    let h_route = h_edge.route.as_ref().expect("H -> C route exists");
+    let entry_x = h_route.target_port.x.round() as u16;
+    assert_eq!(
+        buf[(entry_x, group_top)].symbol(),
+        "┼",
+        "H -> C must cross top boundary at a single doorway junction ┼"
+    );
+
+    assert_eq!(
+        buf[(entry_x, group_top + 1)].symbol(),
+        "▼",
+        "arrowhead ▼ must be inside the group"
+    );
+}
+
+#[test]
+fn issue_10_subgraph_boundaries_left_right() {
+    let source = r#"
+        flowchart LR
+          subgraph VPC
+            A[Web] --> B[App]
+          end
+          B --> C[DB]
+    "#;
+    let mut graph = diaview::parser::mermaid::parse(source).unwrap();
+    diaview::layout::layout(&mut graph);
+
+    let group = &graph.groups[0];
+    let gx = group.x.unwrap();
+    let gy = group.y.unwrap();
+    let gw = group.width.unwrap();
+    let gh = group.height.unwrap();
+
+    let group_left = gx as u16;
+    let group_top = gy as u16;
+    let group_right = gx as u16 + gw.ceil() as u16 - 1;
+    let group_bottom = gy as u16 + gh.ceil() as u16 - 1;
+
+    for node_id in &group.node_ids {
+        let node = graph.nodes.iter().find(|n| n.id == *node_id).unwrap();
+        let nx = node.x.unwrap();
+        let ny = node.y.unwrap();
+        let nw = node.width.unwrap();
+        let nh = node.height.unwrap();
+
+        assert!(nx >= gx + 1.0, "LR: node {} inside left border", node_id);
+        assert!(ny >= gy + 1.0, "LR: node {} inside top border", node_id);
+        assert!(
+            nx + nw < gx + gw - 1.0,
+            "LR: node {} right shadow inside right border",
+            node_id
+        );
+        assert!(
+            ny + nh < gy + gh - 1.0,
+            "LR: node {} bottom shadow inside bottom border",
+            node_id
+        );
+    }
+
+    let (width, height) = graph_bounds(&graph);
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| render_to_frame(&graph, frame))
+        .unwrap();
+    let buf = terminal.backend().buffer();
+
+    assert_eq!(buf[(group_left, group_top)].symbol(), "┌");
+    assert_eq!(buf[(group_right, group_top)].symbol(), "┐");
+    assert_eq!(buf[(group_left, group_bottom)].symbol(), "└");
+    assert_eq!(buf[(group_right, group_bottom)].symbol(), "┘");
+
+    for x in group_left..=group_right {
+        assert_ne!(buf[(x, group_bottom)].symbol(), "▔");
+    }
+
+    let bc_edge = graph
+        .edges
+        .iter()
+        .find(|e| e.source == "B" && e.target == "C")
+        .expect("B -> C edge exists");
+    let bc_route = bc_edge.route.as_ref().expect("B -> C route exists");
+    let exit_y = bc_route.source_port.y.round() as u16;
+
+    assert_eq!(
+        buf[(group_right, exit_y)].symbol(),
+        "┼",
+        "LR: B -> C must cross right boundary at a single doorway junction ┼"
+    );
+
+    for y in (group_top + 1)..group_bottom {
+        if y != exit_y {
+            assert_eq!(
+                buf[(group_right, y)].symbol(),
+                "│",
+                "LR: right border cell at y={} must be │",
+                y
+            );
+        }
+    }
+}
